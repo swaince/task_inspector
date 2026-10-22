@@ -17,15 +17,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import DatePicker from '@/components/common/DatePicker.vue'
+import MemberPicker from '@/components/common/MemberPicker.vue'
 import MetricLegend from '@/components/common/MetricLegend.vue'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import StructuredReport from '@/components/activity/StructuredReport.vue'
 import DailyCharts from '@/components/activity/DailyCharts.vue'
@@ -730,24 +724,15 @@ async function generateReport() {
   <div class="scrollbar-thin h-full overflow-y-auto">
     <div class="space-y-4 p-5">
       <Card class="gap-0 py-4">
-        <CardHeader class="px-4 pb-3">
-          <CardTitle class="text-sm">人员活动</CardTitle>
-        </CardHeader>
         <CardContent class="space-y-3 px-4">
           <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div class="space-y-1.5">
               <Label class="text-xs">人员</Label>
-              <Select v-model="memberId">
-                <SelectTrigger class="w-full">
-                  <SelectValue placeholder="选择一个人" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem v-for="m in members" :key="m.id" :value="m.id">
-                    {{ m.name }}
-                    <span v-if="!m.followed" class="ml-1 text-xs text-muted-foreground">未关注</span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <MemberPicker
+                v-model="memberId"
+                :members="members"
+                placeholder="搜索并选择人员"
+              />
             </div>
             <div class="space-y-1.5">
               <Label class="text-xs">起始日期</Label>
@@ -766,7 +751,7 @@ async function generateReport() {
             </div>
           </div>
 
-          <div class="flex flex-wrap items-center gap-2">
+          <div v-if="progress || analyzedAt" class="flex flex-wrap items-center gap-2">
             <span v-if="progress" class="text-xs text-muted-foreground">{{ progress }}</span>
             <span v-else-if="analyzedAt" class="text-xs text-muted-foreground">{{ analyzedAt }} 分析</span>
           </div>
@@ -775,12 +760,17 @@ async function generateReport() {
             当前关注了 {{ targets.length }} 个项目，会逐个扫描，可能要等一会儿。
           </p>
 
-          <p class="text-[11px] leading-relaxed text-muted-foreground">
-            只扫描「关注且启用」的项目——未关注的项目不参与检查，这里也不看。
-            「估算占比」是把提交单独交给模型估的，<strong>故意不把日报内容告诉它</strong>，
-            这样估算才是对申报的独立参照；申报数据本身照常读取（见「申报工时」列和报告）。
-            估算只覆盖有提交的项目，报了但没提交的项目不会出现在估算里。
-          </p>
+          <details class="text-[11px] text-muted-foreground">
+            <summary class="cursor-pointer select-none">
+              估算口径说明
+            </summary>
+            <p class="mt-1 max-w-prose leading-relaxed">
+              只扫描「关注且启用」的项目——未关注的项目不参与检查，这里也不看。
+              「估算占比」是把提交单独交给模型估的，<strong>故意不把日报内容告诉它</strong>，
+              这样估算才是对申报的独立参照；申报数据本身照常读取（见「申报工时」列和报告）。
+              估算只覆盖有提交的项目，报了但没提交的项目不会出现在估算里。
+            </p>
+          </details>
         </CardContent>
       </Card>
 

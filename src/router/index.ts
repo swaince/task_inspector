@@ -11,7 +11,7 @@ const router = createRouter({
       path: '/',
       name: 'dashboard',
       component: () => import('@/views/DashboardView.vue'),
-      meta: { title: '概览', description: '当天的检查结论、需要跟进的人和异常提交' },
+      meta: { title: '概览', description: '最近一次检查的结论、需要跟进的人和异常提交' },
     },
     {
       path: '/inspect',

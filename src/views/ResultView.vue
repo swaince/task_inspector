@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeftIcon, RotateCwIcon, Trash2Icon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import InspectionReport from '@/components/inspection/InspectionReport.vue'
 import { useHistoryStore } from '@/core/store/history'
@@ -19,6 +20,7 @@ const settingsStore = useSettingsStore()
 
 const rerunning = ref(false)
 const missing = ref(false)
+const confirmRemoveOpen = ref(false)
 
 const date = computed(() => String(route.params.date))
 const memberId = computed(() => String(route.params.memberId))
@@ -58,6 +60,7 @@ async function rerun() {
 
 async function remove() {
   await history.remove(date.value, memberId.value)
+  confirmRemoveOpen.value = false
   await router.push({ name: 'history' })
 }
 </script>
@@ -82,7 +85,7 @@ async function remove() {
               <RotateCwIcon :size="13" class="mr-1.5" :class="rerunning && 'animate-spin'" />
               重新检查
             </Button>
-            <Button variant="ghost" size="sm" @click="remove">
+            <Button variant="ghost" size="sm" @click="confirmRemoveOpen = true">
               <Trash2Icon :size="13" class="mr-1.5" />
               删除
             </Button>
@@ -99,4 +102,25 @@ async function remove() {
       <InspectionReport v-else :result="result" />
     </div>
   </div>
+
+  <Dialog v-model:open="confirmRemoveOpen">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>删除这条检查记录？</DialogTitle>
+      </DialogHeader>
+      <p class="text-sm leading-relaxed text-muted-foreground">
+        这条人日结果会从历史中移除，
+        <strong class="font-medium text-foreground">无法撤销</strong>。
+        需要的话可以先记下结论，或重新执行检查。
+      </p>
+      <DialogFooter>
+        <Button variant="outline" @click="confirmRemoveOpen = false">
+          取消
+        </Button>
+        <Button variant="destructive" @click="remove">
+          删除
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 </template>

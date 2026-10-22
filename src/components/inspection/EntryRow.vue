@@ -164,7 +164,7 @@ const strength = computed(() => {
                 <span
                   v-for="f in ev.files"
                   :key="f"
-                  class="max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                  class="max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
                 >
                   {{ f }}
                 </span>

@@ -304,8 +304,16 @@ export interface AppSettings {
   rules: RuleSettings
   retention: RetentionSettings
   analysis: AnalysisSettings
+  /** 界面主题：跟随系统 / 强制浅色 / 强制深色 */
+  appearance: AppearanceSettings
   /** 工作日历：法定节假日 + 调休上班 + 公司自己的临时安排 */
   workCalendar: WorkCalendarSettings
+}
+
+export type ThemeMode = 'auto' | 'light' | 'dark'
+
+export interface AppearanceSettings {
+  theme: ThemeMode
 }
 
 /* ------------------------------------------------------------------ *
@@ -550,6 +558,9 @@ export function createDefaultSettings(): AppSettings {
       importedAt: null,
       imported: [],
       manual: [],
+    },
+    appearance: {
+      theme: 'auto',
     },
   }
 }

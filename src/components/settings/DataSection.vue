@@ -57,26 +57,25 @@ async function applyImport() {
   }
 }
 
-async function clearHistory() {
-  await historyStore.clear()
-}
-
-async function clearReports() {
-  await reportStore.clear()
-}
-
 /* ------------------------------------------------------------------ *
  * 重置数据
  * ------------------------------------------------------------------ */
 
 const confirmOpen = ref(false)
-const pendingMode = ref<'business' | 'all'>('business')
+const pendingMode = ref<'history' | 'reports' | 'business' | 'all'>('business')
 const resetting = ref(false)
 
-function askReset(mode: 'business' | 'all') {
+function askReset(mode: 'history' | 'reports' | 'business' | 'all') {
   pendingMode.value = mode
   confirmOpen.value = true
 }
+
+const confirmTitle = computed(() => ({
+  history: '清空检查历史？',
+  reports: '清空日报数据？',
+  business: '清空业务数据？',
+  all: '全部重置？',
+}[pendingMode.value]))
 
 /**
  * 清空之后直接重载页面。
@@ -86,6 +85,17 @@ function askReset(mode: 'business' | 'all') {
  * 那样内存状态和库一定是一致的。
  */
 async function doReset() {
+  if (pendingMode.value === 'history') {
+    await historyStore.clear()
+    confirmOpen.value = false
+    return
+  }
+  if (pendingMode.value === 'reports') {
+    await reportStore.clear()
+    confirmOpen.value = false
+    return
+  }
+
   resetting.value = true
   try {
     await transport().dataReset(pendingMode.value)
@@ -127,11 +137,11 @@ async function doReset() {
         </div>
 
         <div class="flex items-end gap-2">
-          <Button variant="outline" size="sm" :disabled="!historyStore.results.length" @click="clearHistory">
+          <Button variant="outline" size="sm" :disabled="!historyStore.results.length" @click="askReset('history')">
             <Trash2Icon :size="13" class="mr-1.5" />
             清空检查历史（{{ historyStore.results.length }}）
           </Button>
-          <Button variant="outline" size="sm" :disabled="!reportStore.totalReports" @click="clearReports">
+          <Button variant="outline" size="sm" :disabled="!reportStore.totalReports" @click="askReset('reports')">
             <Trash2Icon :size="13" class="mr-1.5" />
             清空日报数据（{{ reportStore.totalReports }}）
           </Button>
@@ -207,12 +217,18 @@ async function doReset() {
     <Dialog v-model:open="confirmOpen">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{{ pendingMode === 'all' ? '全部重置？' : '清空业务数据？' }}</DialogTitle>
+          <DialogTitle>{{ confirmTitle }}</DialogTitle>
         </DialogHeader>
         <p class="text-sm leading-relaxed text-muted-foreground">
           <template v-if="pendingMode === 'all'">
             日报、检查历史、提交缓存、项目、人员，以及 GitLab / 日报系统 / 模型 / LDAP 的全部配置都会被清空，
             应用回到刚安装的状态，需要重新配置。
+          </template>
+          <template v-else-if="pendingMode === 'history'">
+            所有批次的检查结果都会被删除；项目、人员、日报和配置保留。
+          </template>
+          <template v-else-if="pendingMode === 'reports'">
+            本地保存的日报快照会被删除；重新同步可以从源系统再拉取。
           </template>
           <template v-else>
             日报、检查历史、提交缓存、项目、人员都会被清空；GitLab / 日报 / 模型 / LDAP 的配置保留。

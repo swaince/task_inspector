@@ -69,36 +69,36 @@ function deviationText(row: ShareRow) {
     <div v-for="row in visible" :key="row.key" class="space-y-1">
       <div class="flex items-baseline gap-2">
         <span class="truncate text-xs font-medium" :title="row.name">{{ row.name }}</span>
-        <span class="shrink-0 text-[10px] text-muted-foreground">{{ row.commits }} 条提交</span>
+        <span class="shrink-0 text-[11px] text-muted-foreground">{{ row.commits }} 条提交</span>
         <span :class="cn('ml-auto shrink-0 text-[11px] tabular-nums', deviationClass(row))">
           {{ deviationText(row) }}
         </span>
       </div>
 
       <div class="flex items-center gap-2">
-        <span class="w-9 shrink-0 text-[10px] text-muted-foreground">申报</span>
+        <span class="w-9 shrink-0 text-[11px] text-muted-foreground">申报</span>
         <div class="h-1.5 flex-1 rounded-full bg-muted/70">
           <div
             class="h-full rounded-full"
             :style="{ width: width(row.reportedShare), backgroundColor: 'var(--verdict-partial)' }"
           />
         </div>
-        <span class="w-10 shrink-0 text-right text-[10px] tabular-nums">{{ label(row.reportedShare) }}</span>
+        <span class="w-10 shrink-0 text-right text-[11px] tabular-nums">{{ label(row.reportedShare) }}</span>
       </div>
 
       <div class="flex items-center gap-2">
-        <span class="w-9 shrink-0 text-[10px] text-muted-foreground">估算</span>
+        <span class="w-9 shrink-0 text-[11px] text-muted-foreground">估算</span>
         <div class="h-1.5 flex-1 rounded-full bg-muted/70">
           <div
             class="h-full rounded-full"
             :style="{ width: width(row.estimatedShare), backgroundColor: 'var(--verdict-matched)' }"
           />
         </div>
-        <span class="w-10 shrink-0 text-right text-[10px] tabular-nums">{{ label(row.estimatedShare) }}</span>
+        <span class="w-10 shrink-0 text-right text-[11px] tabular-nums">{{ label(row.estimatedShare) }}</span>
       </div>
     </div>
 
-    <p class="text-[10px] leading-relaxed text-muted-foreground">
+    <p class="text-[11px] leading-relaxed text-muted-foreground">
       估算只看提交、看不到日报，占比在有提交的项目之间归一化；差距大说明两种口径对不上，值得核对，不直接等于问题。
     </p>
   </div>

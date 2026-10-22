@@ -48,7 +48,7 @@ function barWidth(commits: number) {
               <span class="truncate text-xs font-medium" :title="person.name">{{ person.name }}</span>
               <span
                 v-if="person.unmatched"
-                class="shrink-0 rounded border border-amber-500/40 px-1 py-0.5 text-[10px] text-amber-700 dark:text-amber-400"
+                class="shrink-0 rounded border border-amber-500/40 px-1 py-0.5 text-[11px] text-amber-700 dark:text-amber-400"
                 title="提交作者没能匹配到人员实体，可能是 Git 身份没配全"
               >
                 未匹配

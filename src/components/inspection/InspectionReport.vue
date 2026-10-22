@@ -164,7 +164,7 @@ const hasAttention = computed(() =>
           <div
             v-for="part in excludedParts"
             :key="part.label"
-            class="flex items-center justify-between text-[10px] text-muted-foreground"
+            class="flex items-center justify-between text-[11px] text-muted-foreground"
             :title="part.hint"
           >
             <span>未计入：{{ part.label }}</span>
@@ -202,7 +202,7 @@ const hasAttention = computed(() =>
             <span :class="problems ? 'text-amber-600 dark:text-amber-500' : ''">{{ problems }}</span> 条
           </span>
         </div>
-        <p class="mb-2 text-[10px] text-muted-foreground">
+        <p class="mb-2 text-[11px] text-muted-foreground">
           只有一致 / 部分一致 / 不一致 / 无提交参与得分；无法核对与非编码工作不计入。
         </p>
         <VerdictBreakdown :entries="result.entries" />
@@ -257,7 +257,7 @@ const hasAttention = computed(() =>
       </div>
       <Message from="assistant" class="max-w-none">
         <MessageContent class="max-w-none">
-          <MessageResponse :content="result.narrative" />
+          <MessageResponse :content="result.narrative" class="prose-measure" />
         </MessageContent>
       </Message>
     </div>
@@ -271,7 +271,7 @@ const hasAttention = computed(() =>
           <span class="ml-1.5 text-muted-foreground">{{ result.entries.length }}</span>
           <span
             v-if="problems"
-            class="ml-1.5 rounded-full bg-amber-500/15 px-1.5 text-[10px] text-amber-700 dark:text-amber-400"
+            class="ml-1.5 rounded-full bg-amber-500/15 px-1.5 text-[11px] text-amber-700 dark:text-amber-400"
           >
             {{ problems }} 项待关注
           </span>

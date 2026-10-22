@@ -119,7 +119,7 @@ function fmtTime(iso: string) {
           <span>{{ fmtTime(commit.authoredDate) }}</span>
           <span>{{ commit.authorName }}</span>
           <span class="font-mono">{{ commit.projectPath }}</span>
-          <span v-if="commit.refName" class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px]">
+          <span v-if="commit.refName" class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px]">
             <GitBranchIcon :size="10" />
             {{ commit.refName }}
           </span>
@@ -156,7 +156,7 @@ function fmtTime(iso: string) {
             改动文件 {{ patches.length }} 个
             <button
               type="button"
-              class="ml-auto rounded border px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground transition-colors hover:text-foreground"
+              class="ml-auto rounded border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:text-foreground"
               :class="wrap ? 'bg-muted/50' : ''"
               @click="wrap = !wrap"
             >
@@ -165,9 +165,9 @@ function fmtTime(iso: string) {
           </div>
           <div v-for="p in patches" :key="p.path" class="overflow-hidden rounded-md border">
             <div class="flex items-center gap-2 border-b bg-muted/30 px-2.5 py-1.5">
-              <Badge variant="outline" class="shrink-0 text-[10px]">{{ changeLabel(p) }}</Badge>
+              <Badge variant="outline" class="shrink-0 text-[11px]">{{ changeLabel(p) }}</Badge>
               <span class="truncate font-mono text-[11px]">{{ p.path }}</span>
-              <span v-if="p.oldPath" class="shrink-0 text-[10px] text-muted-foreground">
+              <span v-if="p.oldPath" class="shrink-0 text-[11px] text-muted-foreground">
                 ← {{ p.oldPath }}
               </span>
             </div>

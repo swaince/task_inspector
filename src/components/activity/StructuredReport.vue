@@ -96,8 +96,8 @@ const segments = computed<Segment[]>(() => {
       >
         这段图表数据不是合法 JSON，已跳过渲染；数字仍以上方表格为准。
         <details class="mt-1">
-          <summary class="cursor-pointer text-[10px]">查看原始内容</summary>
-          <pre class="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[10px]">{{ seg.raw }}</pre>
+          <summary class="cursor-pointer text-[11px]">查看原始内容</summary>
+          <pre class="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[11px]">{{ seg.raw }}</pre>
         </details>
       </div>
 
@@ -107,13 +107,13 @@ const segments = computed<Segment[]>(() => {
       >
         旧版报告里的 mermaid 图表已停止渲染，避免一直卡在加载状态。重新生成报告即可得到可交互的图表。
         <details class="mt-1">
-          <summary class="cursor-pointer text-[10px]">查看原始内容</summary>
-          <pre class="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[10px]">{{ seg.raw }}</pre>
+          <summary class="cursor-pointer text-[11px]">查看原始内容</summary>
+          <pre class="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[11px]">{{ seg.raw }}</pre>
         </details>
       </div>
 
       <div v-else-if="seg.type === 'code'" class="overflow-hidden rounded-lg border bg-muted/20">
-        <div class="border-b px-3 py-1 font-mono text-[10px] text-muted-foreground">
+        <div class="border-b px-3 py-1 font-mono text-[11px] text-muted-foreground">
           {{ seg.lang || 'text' }}
         </div>
         <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{{ seg.raw }}</pre>

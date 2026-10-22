@@ -61,27 +61,28 @@ const llmReady = computed(() => settingsStore.llmConfigured)
       </div>
     </div>
 
-    <nav class="no-drag flex-1 space-y-0.5 px-2 py-2">
-      <RouterLink
-        v-for="item in items"
-        :key="item.name"
-        :to="{ name: item.name }"
-        :class="
-          cn(
-            'flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors',
-            activeName === item.name
-              ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-              : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground',
-          )
-        "
-      >
-        <component :is="item.icon" :size="16" class="shrink-0" />
-        <span class="truncate">{{ item.label }}</span>
-        <span
-          v-if="item.name === 'inspect' && runner.running"
-          class="ml-auto size-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500"
-        />
-      </RouterLink>
+    <nav class="no-drag flex-1 space-y-0.5 overflow-y-auto px-2 py-2">
+      <template v-for="(item, index) in items" :key="item.name">
+        <div v-if="index === 3 || index === 5" class="my-1 h-px bg-sidebar-border/70" />
+        <RouterLink
+          :to="{ name: item.name }"
+          :class="
+            cn(
+              'relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors',
+              activeName === item.name
+                ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-foreground'
+                : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground',
+            )
+          "
+        >
+          <component :is="item.icon" :size="16" class="shrink-0" />
+          <span class="truncate">{{ item.label }}</span>
+          <span
+            v-if="item.name === 'inspect' && runner.running"
+            class="ml-auto size-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500"
+          />
+        </RouterLink>
+      </template>
     </nav>
 
     <div class="no-drag space-y-1.5 border-t px-4 py-3 text-[11px] text-muted-foreground">

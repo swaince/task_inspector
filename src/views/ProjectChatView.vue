@@ -313,7 +313,7 @@ function openSettings() {
 
       <div class="min-w-0">
         <div class="flex min-w-0 items-center gap-2">
-          <span class="truncate text-sm font-medium">{{ project?.name ?? '项目对话' }}</span>
+          <span class="truncate text-sm font-medium" :title="project?.description">{{ project?.name ?? '项目对话' }}</span>
           <Badge v-if="project?.code" variant="outline" class="font-mono">
             {{ project.code }}
           </Badge>
@@ -324,18 +324,37 @@ function openSettings() {
             未关注
           </Badge>
         </div>
-        <div class="mt-0.5 truncate text-[11px] text-muted-foreground">
-          <template v-if="project">
-            {{ project.repos?.length ?? 0 }} 个仓库
-            <template v-if="project.description"> · {{ project.description }}</template>
-          </template>
-          <template v-else>
-            围绕当前项目提问
-          </template>
+        <div
+          class="mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-[11px] text-muted-foreground"
+          :title="state.building ? state.buildProgress : (statusText || project?.description || '')"
+        >
+          <Loader2Icon v-if="state.building" :size="11" class="shrink-0 animate-spin" />
+          <DatabaseIcon v-else :size="11" class="shrink-0" />
+          <span class="truncate">
+            <template v-if="state.building">
+              {{ state.buildProgress || '正在整理项目资料…' }}
+            </template>
+            <template v-else-if="stats">
+              {{ statusText }}
+            </template>
+            <template v-else>
+              资料还没有载入
+            </template>
+          </span>
         </div>
       </div>
 
       <div class="ml-auto flex shrink-0 items-center gap-1">
+        <Button
+          v-if="stats"
+          variant="ghost"
+          size="sm"
+          class="px-1.5"
+          title="查看本次对话使用的资料"
+          @click="contextOpen = true"
+        >
+          <InfoIcon :size="13" />
+        </Button>
         <Button
           variant="outline"
           size="sm"
@@ -363,40 +382,7 @@ function openSettings() {
       </div>
     </div>
 
-    <!-- 资料状态：回答的依据是什么，一眼能看见 -->
-    <div class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 px-5 py-1.5 text-[11px] text-muted-foreground">
-      <Loader2Icon v-if="state.building" :size="12" class="animate-spin" />
-      <DatabaseIcon v-else :size="12" />
-      <template v-if="state.building">
-        {{ state.buildProgress || '正在整理项目资料…' }}
-      </template>
-      <template v-else-if="stats">
-        {{ statusText }}
-      </template>
-      <template v-else>
-        资料还没有载入
-      </template>
-
-      <Button
-        v-if="stats"
-        variant="link"
-        size="sm"
-        class="ml-auto h-auto px-0 text-[11px]"
-        @click="contextOpen = true"
-      >
-        <InfoIcon :size="12" class="mr-1" />
-        查看资料
-      </Button>
-      <Button
-        v-else-if="!state.building"
-        variant="link"
-        size="sm"
-        class="ml-auto h-auto px-0 text-[11px]"
-        @click="ensureContext(true)"
-      >
-        重试
-      </Button>
-    </div>
+    <!-- 资料状态已经并进项目条，避免页头叠三层 -->
 
     <Alert v-if="!llmReady" class="mx-5 mt-3 w-auto shrink-0">
       <AlertDescription class="flex flex-wrap items-center justify-between gap-3">
@@ -529,14 +515,13 @@ function openSettings() {
                   : llmReady
                     ? '问这个项目的架构、模块、核心功能或最近的开发情况…'
                     : '请先在设置里配置模型'"
-                class="min-h-20"
+                class="min-h-16"
               />
             </PromptInputBody>
             <PromptInputFooter>
               <PromptInputTools>
                 <span class="px-1.5 text-[11px] text-muted-foreground">
-                  资料范围：最近 {{ DAYS }} 天
-                  <template v-if="stats"> · {{ stats.commits }} 个提交 / {{ stats.reportEntries }} 条日报</template>
+                  模型：{{ settingsStore.settings.llm.model || '未配置' }}
                 </span>
               </PromptInputTools>
 
@@ -552,9 +537,8 @@ function openSettings() {
             </PromptInputFooter>
           </PromptInput>
 
-          <p class="text-[10px] leading-relaxed text-muted-foreground">
-            Enter 发送，Shift + Enter 换行。提问内容和整理出的项目资料会发送给「设置 → 模型」中配置的服务；
-            日报是成员自述，回答会把它和提交记录分开说明。
+          <p class="text-[11px] leading-relaxed text-muted-foreground">
+            Enter 发送，Shift + Enter 换行。项目资料会发送给「设置 → 模型」中配置的服务。
           </p>
         </div>
       </div>

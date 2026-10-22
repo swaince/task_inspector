@@ -607,9 +607,6 @@ function fmtTime(iso: string) {
   <div class="scrollbar-thin h-full overflow-y-auto">
     <div class="space-y-4 p-5">
       <Card class="gap-0 py-4">
-        <CardHeader class="px-4 pb-3">
-          <CardTitle class="text-sm">项目活动</CardTitle>
-        </CardHeader>
         <CardContent class="space-y-3 px-4">
           <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div class="space-y-1.5 lg:col-span-2">
@@ -636,24 +633,29 @@ function fmtTime(iso: string) {
             </div>
           </div>
 
-          <div class="flex flex-wrap items-center gap-2">
-            <Button :disabled="loading || !selected" @click="load">
-              <Loader2Icon v-if="loading" :size="13" class="mr-1.5 animate-spin" />
-              <PlayIcon v-else :size="13" class="mr-1.5" />
-              查这段时间
-            </Button>
+          <div class="flex flex-wrap items-center gap-2 border-t pt-3">
             <span v-if="progress" class="text-xs text-muted-foreground">{{ progress }}</span>
             <span v-else-if="scannedAt" class="text-xs text-muted-foreground">
               <RefreshCwIcon :size="11" class="mr-1 inline" />
               {{ scannedAt }} 扫描
             </span>
+            <Button class="ml-auto" :disabled="loading || !selected" @click="load">
+              <Loader2Icon v-if="loading" :size="13" class="mr-1.5 animate-spin" />
+              <PlayIcon v-else :size="13" class="mr-1.5" />
+              查这段时间
+            </Button>
           </div>
 
-          <p class="text-[11px] leading-relaxed text-muted-foreground">
-            提交按「前一天 20:00 ~ 次日 08:00」的窗口归属到日期，和「执行检查」用的是同一套规则，
-            所以同一个提交在两个页面归属的日子一致。默认最近 7 天（截止昨天）——日报当天晚上才上报，
-            含今天会不完整；周末和节假日按工作日历自动排除在缺报判断之外。
-          </p>
+          <details class="text-[11px] text-muted-foreground">
+            <summary class="cursor-pointer select-none">
+              时间口径说明
+            </summary>
+            <p class="mt-1 max-w-prose leading-relaxed">
+              提交按「前一天 20:00 ~ 次日 08:00」的窗口归属到日期，和「执行检查」用的是同一套规则，
+              所以同一个提交在两个页面归属的日子一致。默认最近 7 天（截止昨天）——日报当天晚上才上报，
+              含今天会不完整；周末和节假日按工作日历自动排除在缺报判断之外。
+            </p>
+          </details>
         </CardContent>
       </Card>
 

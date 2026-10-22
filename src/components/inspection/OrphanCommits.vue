@@ -48,7 +48,7 @@ const grouped = computed(() => {
         <span class="text-muted-foreground">{{ group.commits.length }} 个提交</span>
         <span
           v-if="group.mapped"
-          class="truncate font-mono text-[10px] text-muted-foreground"
+          class="truncate font-mono text-[11px] text-muted-foreground"
           :title="[...group.paths].join('、')"
         >
           {{ [...group.paths].join('、') }}

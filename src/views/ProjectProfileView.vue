@@ -18,6 +18,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import MessageResponse from '@/components/ai-elements/message/MessageResponse.vue'
 import ModuleGraph from '@/components/projects/ModuleGraph.vue'
 import { buildProjectProfile } from '@/core/engine/profile'
@@ -46,6 +47,7 @@ const profile = computed<ProjectProfile | null>(() => profileStore.byProject[pro
 
 const error = ref<string | null>(null)
 const skillWarnings = ref<string[]>([])
+const confirmRemoveOpen = ref(false)
 /** 没有 git 时克隆与热点都用不了，提前告诉用户，而不是等报错 */
 const gitMissing = ref(false)
 
@@ -125,6 +127,7 @@ async function generate() {
 
 async function remove() {
   await profileStore.clear(projectId.value)
+  confirmRemoveOpen.value = false
 }
 
 function langText(repo: RepoProfile) {
@@ -184,7 +187,13 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
             <MessageSquareIcon :size="13" class="mr-1.5" />
             项目对话
           </Button>
-          <Button v-if="profile" variant="ghost" size="sm" :disabled="profileStore.generating" @click="remove">
+          <Button
+            v-if="profile"
+            variant="ghost"
+            size="sm"
+            :disabled="profileStore.generating"
+            @click="confirmRemoveOpen = true"
+          >
             <Trash2Icon :size="13" class="mr-1.5" />
             删除画像
           </Button>
@@ -239,7 +248,7 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
             </CardTitle>
           </CardHeader>
           <CardContent class="px-4">
-            <p class="text-sm leading-relaxed whitespace-pre-wrap text-muted-foreground">
+            <p class="max-w-prose text-sm leading-relaxed whitespace-pre-wrap text-muted-foreground">
               {{ profile.narrative }}
             </p>
           </CardContent>
@@ -253,7 +262,7 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
             </CardTitle>
           </CardHeader>
           <CardContent class="px-4">
-            <MessageResponse :content="profile.report" />
+            <MessageResponse :content="profile.report" class="prose-measure" />
           </CardContent>
         </Card>
 
@@ -369,5 +378,26 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
         </CardContent>
       </Card>
     </div>
+
+    <Dialog v-model:open="confirmRemoveOpen">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>删除这个项目的画像？</DialogTitle>
+        </DialogHeader>
+        <p class="text-sm leading-relaxed text-muted-foreground">
+          已生成的模块结构、热点文件和问题清单都会被删除，
+          <strong class="font-medium text-foreground">需要重新扫描才能恢复</strong>。
+          项目本身和 GitLab 关联不受影响。
+        </p>
+        <DialogFooter>
+          <Button variant="outline" @click="confirmRemoveOpen = false">
+            取消
+          </Button>
+          <Button variant="destructive" @click="remove">
+            删除画像
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>

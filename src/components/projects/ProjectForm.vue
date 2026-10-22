@@ -255,7 +255,7 @@ async function resolve() {
       <div class="flex flex-wrap items-center gap-2">
         <h4 class="text-sm font-medium">GitLab 关联</h4>
         <span
-          class="rounded border px-1.5 py-0.5 text-[10px]"
+          class="rounded border px-1.5 py-0.5 text-[11px]"
           :class="{
             'border-emerald-500/40 text-emerald-700 dark:text-emerald-400': draft.syncStatus === 'synced',
             'border-destructive/40 text-destructive': draft.syncStatus === 'missing' || draft.syncStatus === 'error',

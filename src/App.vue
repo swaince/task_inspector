@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
+import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { applyTheme } from '@/composables/theme'
 import { useSettingsStore } from '@/core/store/settings'
 import { useHistoryStore } from '@/core/store/history'
 import { useReportStore } from '@/core/store/reports'
@@ -16,6 +18,13 @@ const reportStore = useReportStore()
 const title = computed(() => (route.meta.title as string | undefined) ?? '研发工作核查')
 /** 页头的一句话说明：每个页面只回答一个问题，入口处就说清楚，避免三个分析页混淆 */
 const description = computed(() => (route.meta.description as string | undefined) ?? '')
+
+// 设置加载完成或用户在页头切换后立即应用；默认值 auto 与挂载前的行为一致
+watch(
+  () => settingsStore.settings.appearance.theme,
+  theme => applyTheme(theme),
+  { immediate: true },
+)
 
 onMounted(async () => {
   await Promise.all([
@@ -47,6 +56,10 @@ onMounted(async () => {
           </p>
         </div>
         <slot name="header" />
+
+        <div class="ml-auto flex shrink-0 items-center gap-1">
+          <ThemeToggle />
+        </div>
       </header>
 
       <Alert

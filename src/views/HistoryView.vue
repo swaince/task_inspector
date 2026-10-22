@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { InspectionResult } from '@/core/domain/types'
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ChevronDownIcon, ChevronRightIcon, HistoryIcon } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -21,12 +22,30 @@ import { cn } from '@/lib/utils'
  * 所以先按 runId 聚成批次，再在批次里按日期展开；旧记录没有 runId，按日期归为单日批次。
  */
 const router = useRouter()
+const route = useRoute()
 const history = useHistoryStore()
 
+/** 从概览的日期快捷入口进来时，直接筛到那一天 */
+function queryDate(value: unknown) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : ''
+}
+
 const filter = ref('')
-const from = ref('')
-const to = ref('')
+const from = ref(queryDate(route.query.date))
+const to = ref(queryDate(route.query.date))
 const expanded = ref<Set<string>>(new Set())
+const confirmClearOpen = ref(false)
+
+watch(
+  () => route.query.date,
+  (value) => {
+    const date = queryDate(value)
+    if (!date)
+      return
+    from.value = date
+    to.value = date
+  },
+)
 
 const filtered = computed(() => {
   const keyword = filter.value.trim().toLowerCase()
@@ -183,6 +202,7 @@ onMounted(() => history.load())
 
 async function clearAll() {
   await history.clear()
+  confirmClearOpen.value = false
 }
 </script>
 
@@ -210,7 +230,7 @@ async function clearAll() {
           v-if="history.results.length"
           variant="ghost"
           class="ml-auto"
-          @click="clearAll"
+          @click="confirmClearOpen = true"
         >
           清空历史
         </Button>
@@ -360,7 +380,13 @@ async function clearAll() {
                         compact
                       />
                       <span
-                        v-if="!item.entries.some(en => en.verdict !== 'matched')"
+                        v-if="!item.entries.length"
+                        class="text-xs text-muted-foreground"
+                      >
+                        无日报条目
+                      </span>
+                      <span
+                        v-else-if="!item.entries.some(en => en.verdict !== 'matched')"
                         class="text-xs text-muted-foreground"
                       >
                         全部一致
@@ -385,5 +411,26 @@ async function clearAll() {
         </div>
       </div>
     </div>
+
+    <Dialog v-model:open="confirmClearOpen">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>清空全部检查历史？</DialogTitle>
+        </DialogHeader>
+        <p class="text-sm leading-relaxed text-muted-foreground">
+          所有批次的检查结果都会被删除，
+          <strong class="font-medium text-foreground">无法撤销</strong>。
+          项目、人员和配置不受影响，但已经生成的结论不会保留。
+        </p>
+        <DialogFooter>
+          <Button variant="outline" @click="confirmClearOpen = false">
+            取消
+          </Button>
+          <Button variant="destructive" @click="clearAll">
+            清空
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>

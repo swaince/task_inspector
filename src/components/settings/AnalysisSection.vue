@@ -419,7 +419,7 @@ onMounted(async () => {
 
             <span
               v-if="tools[tool.kind].status?.source"
-              class="text-[10px] text-muted-foreground"
+              class="text-[11px] text-muted-foreground"
             >
               来源：{{ tools[tool.kind].status?.source === 'path' ? 'PATH' : '手动指定' }}
             </span>
@@ -496,7 +496,7 @@ onMounted(async () => {
             </div>
             <pre
               v-if="installs[tool.kind].log.length"
-              class="max-h-40 overflow-auto rounded border bg-muted/40 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap"
+              class="max-h-40 overflow-auto rounded border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
             >{{ installs[tool.kind].log.slice(-200).join('\n') }}</pre>
           </div>
         </div>

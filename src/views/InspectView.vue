@@ -3,6 +3,8 @@ import type { InspectionResult, MemberProfile, VerdictLevel } from '@/core/domai
 import { computed, ref } from 'vue'
 import {
   ArrowRightIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CircleStopIcon,
   CloudDownloadIcon,
   InfoIcon,
@@ -206,7 +208,7 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
     <div class="space-y-4 p-5">
       <!-- 参数区 -->
       <Card class="gap-0 py-4">
-        <CardContent class="space-y-4 px-4">
+        <CardContent class="space-y-3 px-4">
           <div class="flex flex-wrap items-end gap-3">
             <div class="space-y-1.5">
               <Label class="text-xs">起始日期</Label>
@@ -221,22 +223,19 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
               最近 7 天
             </Button>
 
-            <Separator orientation="vertical" class="h-9" />
-
-            <div class="min-w-0 flex-1">
-              <div class="text-xs text-muted-foreground">日报来源</div>
-              <div class="mt-1 flex items-center gap-2">
-                <span class="truncate text-sm">{{ sourceLabel }}</span>
-                <Badge variant="secondary" class="shrink-0">
-                  区间内已载入 {{ reportsLoaded }} 份
-                </Badge>
-              </div>
-            </div>
-
             <Button variant="outline" :disabled="syncing || runner.running" @click="refreshReports">
               <CloudDownloadIcon :size="14" class="mr-1.5" />
               {{ syncing ? '同步中…' : '刷新日报' }}
             </Button>
+          </div>
+
+          <!-- 来源单独一行：接口地址可能很长，挤在日期后面只会被截成一个字 -->
+          <div class="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+            <span class="shrink-0 text-muted-foreground">日报来源</span>
+            <span class="min-w-0 truncate font-medium" :title="sourceLabel">{{ sourceLabel }}</span>
+            <Badge variant="secondary" class="shrink-0">
+              区间内已载入 {{ reportsLoaded }} 份
+            </Badge>
           </div>
 
           <Alert v-if="syncError" variant="destructive">
@@ -260,7 +259,7 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
 
       <!-- 检查范围：不再手选人员，关注即范围 -->
       <Card class="gap-0 py-4">
-        <CardContent class="px-4">
+        <CardContent class="space-y-3 px-4">
           <div v-if="followedMembers.length" class="flex flex-wrap items-center gap-x-6 gap-y-2">
             <div class="flex items-center gap-2 text-sm">
               <UsersIcon :size="14" class="text-muted-foreground" />
@@ -269,7 +268,7 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
                 <strong class="font-semibold">{{ workdayList.length }}</strong> 个工作日
               </span>
             </div>
-            <span class="text-[11px] text-muted-foreground">
+            <span class="text-xs text-muted-foreground">
               {{ rangeDays.length }} 个自然日，已跳过 {{ skippedDays }} 个周末/节假日；项目按「关注」
               范围匹配
             </span>
@@ -291,36 +290,35 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
               去人员页设置
             </Button>
           </div>
+
+          <div class="flex flex-wrap items-center gap-3 border-t pt-3">
+            <Button v-if="!runner.running" :disabled="!canRun" @click="start">
+              <PlayIcon :size="14" class="mr-1.5" />
+              开始检查 {{ followedMembers.length }} 人 × {{ workdayList.length }} 天
+            </Button>
+            <Button v-else variant="destructive" @click="runner.cancel()">
+              <CircleStopIcon :size="14" class="mr-1.5" />
+              中止
+            </Button>
+
+            <Button
+              v-if="runner.catalog"
+              variant="ghost"
+              size="sm"
+              :disabled="runner.buildingCatalog"
+              :title="`发现范围：${runner.catalog.scope}`"
+              @click="runner.ensureCatalog(true)"
+            >
+              <RefreshCwIcon :size="13" class="mr-1.5" :class="runner.buildingCatalog && 'animate-spin'" />
+              重建仓库目录（{{ runner.catalog.projects.length }} 个）
+            </Button>
+
+            <span v-if="blockers.length" class="text-xs text-amber-600 dark:text-amber-500">
+              {{ blockers[0] }}
+            </span>
+          </div>
         </CardContent>
       </Card>
-
-      <!-- 操作 -->
-      <div class="flex items-center gap-3">
-        <Button v-if="!runner.running" :disabled="!canRun" @click="start">
-          <PlayIcon :size="14" class="mr-1.5" />
-          开始检查 {{ followedMembers.length }} 人 × {{ workdayList.length }} 天
-        </Button>
-        <Button v-else variant="destructive" @click="runner.cancel()">
-          <CircleStopIcon :size="14" class="mr-1.5" />
-          中止
-        </Button>
-
-        <Button
-          v-if="runner.catalog"
-          variant="ghost"
-          size="sm"
-          :disabled="runner.buildingCatalog"
-          :title="`发现范围：${runner.catalog.scope}`"
-          @click="runner.ensureCatalog(true)"
-        >
-          <RefreshCwIcon :size="13" class="mr-1.5" :class="runner.buildingCatalog && 'animate-spin'" />
-          重建仓库目录（{{ runner.catalog.projects.length }} 个）
-        </Button>
-
-        <span v-if="blockers.length" class="text-xs text-muted-foreground">
-          {{ blockers[0] }}
-        </span>
-      </div>
 
       <!--
         缺 GitLab 不拦着运行（方便先验证流程），但必须在运行前说清后果，
@@ -408,6 +406,7 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
           <button
             type="button"
             class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-accent/40"
+            :aria-expanded="expanded.has(result.id)"
             @click="toggleExpand(result.id)"
           >
             <Badge variant="outline" class="shrink-0 font-mono text-[10px]">
@@ -444,6 +443,8 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
             <span class="ml-auto text-xs tabular-nums text-muted-foreground">
               {{ result.summary.totalHours }}h · {{ result.entries.length }} 条
             </span>
+            <ChevronDownIcon v-if="expanded.has(result.id)" :size="14" class="shrink-0 text-muted-foreground" />
+            <ChevronRightIcon v-else :size="14" class="shrink-0 text-muted-foreground" />
           </button>
 
           <Separator v-if="expanded.has(result.id)" />

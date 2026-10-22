@@ -86,6 +86,7 @@ async function toggleFollow(member: MemberProfile, followed: boolean) {
 const selectedIds = ref<Set<string>>(new Set())
 const batchBusy = ref(false)
 const confirmDeleteOpen = ref(false)
+const singleDelete = ref<MemberProfile | null>(null)
 
 /**
  * 分页：人员有几百个，全量渲染会让首屏变慢，翻起来也没有节奏。
@@ -273,6 +274,14 @@ async function remove(member: MemberProfile) {
   message.value = `已删除「${member.name}」`
 }
 
+async function confirmSingleDelete() {
+  const member = singleDelete.value
+  if (!member)
+    return
+  await remove(member)
+  singleDelete.value = null
+}
+
 /** 把日报里出现但还没配的人一次性建进来 */
 async function importFromReports() {
   const drafts = missingFromReports.value.map((m) => {
@@ -288,9 +297,8 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
 </script>
 
 <template>
-  <div class="scrollbar-thin h-full overflow-y-auto">
-    <div class="space-y-4 p-5">
-      <div class="grid gap-3 sm:grid-cols-4">
+  <div class="flex h-full min-h-0 flex-col gap-3 p-5">
+    <div class="grid shrink-0 gap-3 sm:grid-cols-4">
         <StatCard label="人员总数" :value="memberStore.items.length" :icon="UsersIcon" />
         <StatCard label="参与检查" :value="memberStore.enabled.length" />
         <StatCard
@@ -307,11 +315,11 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
         />
       </div>
 
-      <Card class="gap-0 py-3">
+      <Card class="shrink-0 gap-0 py-3">
         <CardContent class="flex flex-wrap items-center gap-2 px-4">
           <div class="relative min-w-[12rem] flex-1">
             <SearchIcon :size="14" class="absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" />
-            <Input v-model="keyword" placeholder="按姓名、工号、团队、GitLab 账号搜索…" class="pl-8" />
+            <Input v-model="keyword" placeholder="搜索姓名、工号、团队…" class="pl-8" />
           </div>
 
           <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
@@ -324,10 +332,10 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
           </label>
 
           <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-            <Checkbox
+            <Switch
               :model-value="onlyProblems"
-              class="pointer-events-none"
-              @click="onlyProblems = !onlyProblems"
+              class="scale-75"
+              @update:model-value="v => (onlyProblems = !!v)"
             />
             只看身份缺失
           </label>
@@ -344,11 +352,11 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
         </CardContent>
       </Card>
 
-      <Alert v-if="message">
+      <Alert v-if="message" class="shrink-0">
         <AlertDescription>{{ message }}</AlertDescription>
       </Alert>
 
-      <Alert v-if="memberStore.emailConflicts.length" variant="destructive">
+      <Alert v-if="memberStore.emailConflicts.length" variant="destructive" class="shrink-0">
         <AlertTriangleIcon :size="14" />
         <AlertTitle>{{ memberStore.emailConflicts.length }} 个邮箱被多个成员占用</AlertTitle>
         <AlertDescription>
@@ -361,7 +369,7 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
         </AlertDescription>
       </Alert>
 
-      <Alert v-if="missingFromReports.length">
+      <Alert v-if="missingFromReports.length" class="shrink-0">
         <UsersIcon :size="14" />
         <AlertTitle>有 {{ missingFromReports.length }} 人在日报里出现但还没建进来</AlertTitle>
         <AlertDescription class="flex flex-wrap items-center gap-2">
@@ -375,9 +383,9 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
         </AlertDescription>
       </Alert>
 
-      <Skeleton v-if="memberStore.loading && !memberStore.items.length" class="h-64 w-full" />
+      <Skeleton v-if="memberStore.loading && !memberStore.items.length" class="h-64 w-full shrink-0" />
 
-      <div v-else-if="!filtered.length" class="rounded-lg border border-dashed p-12 text-center">
+      <div v-else-if="!filtered.length" class="flex flex-1 flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
         <p class="text-sm text-muted-foreground">
           {{ memberStore.items.length ? '没有匹配的人员' : '还没有人员。点「从日志中心同步」按用户清单批量建，或手动新建。' }}
         </p>
@@ -386,12 +394,12 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
         </p>
       </div>
 
-      <div v-else class="overflow-hidden rounded-lg border">
+      <div v-else class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
         <!--
           批量操作条常驻表格上方，高度固定。没有勾选时按钮置灰而不是隐藏，
           这样勾选、取消勾选只改变按钮状态，表格不会上下跳动。
         -->
-        <div class="flex h-11 items-center gap-2 border-b px-3 text-[11px] text-muted-foreground">
+        <div class="flex h-11 shrink-0 items-center gap-2 border-b px-3 text-[11px] text-muted-foreground">
           <span v-if="selectedIds.size" class="font-medium text-foreground">
             已选 {{ selectedIds.size }} 项
           </span>
@@ -419,7 +427,8 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
           </div>
         </div>
 
-        <Table>
+        <div class="table-fill">
+          <Table>
           <TableHeader>
             <TableRow class="hover:bg-transparent">
               <TableHead class="h-9 w-9">
@@ -512,8 +521,8 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
                 <Switch
                   :model-value="m.followed"
                   :title="m.followed
-                    ? '已关注：列表默认显示，检查页默认勾选'
-                    : '未关注：列表默认隐藏，检查页也不默认勾选（仍可手动勾上）'"
+                    ? '已关注：列表默认显示，检查时参与'
+                    : '未关注：列表默认隐藏，检查时不参与'"
                   @update:model-value="v => toggleFollow(m, !!v)"
                 />
               </TableCell>
@@ -523,16 +532,23 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
                   <Button variant="ghost" size="sm" class="px-1.5" @click="openEdit(m)">
                     <PencilIcon :size="13" />
                   </Button>
-                  <Button variant="ghost" size="sm" class="px-1.5" @click="remove(m)">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="px-1.5"
+                    title="删除人员"
+                    @click="singleDelete = m"
+                  >
                     <Trash2Icon :size="13" />
                   </Button>
                 </div>
               </TableCell>
             </TableRow>
           </TableBody>
-        </Table>
+          </Table>
+        </div>
 
-        <div class="flex h-11 items-center gap-3 border-t px-3 text-[11px] text-muted-foreground">
+        <div class="flex h-11 shrink-0 items-center gap-3 border-t px-3 text-[11px] text-muted-foreground">
           <span>共 {{ filtered.length }} 人 · 第 {{ page }} / {{ pageCount }} 页</span>
           <span v-if="selectedIds.size">已选 {{ selectedIds.size }} 项</span>
 
@@ -547,12 +563,18 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
         </div>
       </div>
 
-      <p class="text-[11px] text-muted-foreground">
-        「关注」只影响这个列表默认显不显示，不参与检查逻辑——取消关注的人仍然照常检查。
-      </p>
-      <p v-if="hiddenByFollow" class="text-[11px] text-muted-foreground">
-        另有 {{ hiddenByFollow }} 个未关注的人员已隐藏。
-      </p>
+      <details class="shrink-0 text-[11px] text-muted-foreground">
+        <summary class="cursor-pointer select-none">
+          关注与字段说明
+        </summary>
+        <p class="mt-1 leading-relaxed">
+          「关注」既决定这个列表默认显不显示，也决定检查范围：只有关注且启用的人
+          会参与检查，未关注的人的日报不会被核查。
+        </p>
+        <p v-if="hiddenByFollow" class="mt-1">
+          另有 {{ hiddenByFollow }} 个未关注的人员已隐藏。
+        </p>
+      </details>
     </div>
 
     <Dialog v-model:open="dialogOpen">
@@ -565,12 +587,37 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
           v-model="editing"
           :others="memberStore.items"
         />
-        <DialogFooter>
+        <DialogFooter class="sticky bottom-0 z-10 bg-popover">
           <Button variant="outline" @click="dialogOpen = false">
             取消
           </Button>
           <Button @click="save">
             保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- 单行删除：和批量删除一样需要确认 -->
+    <Dialog
+      :open="Boolean(singleDelete)"
+      @update:open="open => { if (!open) singleDelete = null }"
+    >
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>删除人员「{{ singleDelete?.name }}」？</DialogTitle>
+        </DialogHeader>
+        <p class="text-sm leading-relaxed text-muted-foreground">
+          这个人的日报 ID、GitLab 身份和关注设置都会被删掉，
+          <strong class="font-medium text-foreground">无法撤销</strong>。
+          如果只是暂时不参与检查，用「取消关注」即可。
+        </p>
+        <DialogFooter>
+          <Button variant="outline" @click="singleDelete = null">
+            取消
+          </Button>
+          <Button variant="destructive" @click="confirmSingleDelete">
+            删除
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -587,7 +634,7 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
           <strong class="font-medium text-foreground">无法撤销</strong>。
           如果只是想暂时不检查他，用「取消关注」或「停用」——配置都还在。
         </p>
-        <DialogFooter>
+        <DialogFooter class="sticky bottom-0 z-10 bg-popover">
           <Button variant="outline" @click="confirmDeleteOpen = false">
             取消
           </Button>
@@ -656,7 +703,7 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
           </p>
         </div>
 
-        <DialogFooter>
+        <DialogFooter class="sticky bottom-0 z-10 bg-popover">
           <Button variant="outline" @click="logOpen = false">
             {{ logOutcome ? '关闭' : '取消' }}
           </Button>
@@ -671,5 +718,4 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  </div>
 </template>
