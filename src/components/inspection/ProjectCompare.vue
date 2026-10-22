@@ -58,6 +58,10 @@ interface Row {
   reason: string
   attention: boolean
   orphan: boolean
+  /** 项目没映射到仓库：无法核对，也不计入得分 */
+  unresolved: boolean
+  /** 条目属于会议/评审等非编码工作，不要求提交 */
+  nonCoding: boolean
 }
 
 const rows = computed<Row[]>(() => {
@@ -79,6 +83,8 @@ const rows = computed<Row[]>(() => {
         reason: '',
         attention: false,
         orphan: false,
+        unresolved: false,
+        nonCoding: false,
       }
       map.set(name, row)
     }
@@ -87,10 +93,20 @@ const rows = computed<Row[]>(() => {
     row.counts[entry.verdict] = (row.counts[entry.verdict] ?? 0) + 1
     const strength = entry.evidenceStrength ?? 'none'
     row.evidence[strength]++
+    if (entry.projectUnresolved)
+      row.unresolved = true
+    if (entry.nonCodingWork)
+      row.nonCoding = true
     if (needsFollowUp(entry)) {
       row.attention = true
       if (!row.reason)
         row.reason = entry.reason
+    }
+    else if (!row.reason && entry.projectUnresolved) {
+      row.reason = '项目未映射到 GitLab 仓库，无法核对（不计入得分）'
+    }
+    else if (!row.reason && entry.nonCodingWork) {
+      row.reason = '非编码工作，不要求提交（不计入得分）'
     }
   }
 
@@ -146,6 +162,8 @@ const rows = computed<Row[]>(() => {
         : `日报未提及该仓库${example}`,
       attention: true,
       orphan: true,
+      unresolved: false,
+      nonCoding: false,
     })
   }
 
@@ -201,6 +219,8 @@ function evidenceText(row: Row) {
               </template>
               <template v-else>
                 {{ row.entryCount }} 条日报
+                <template v-if="row.unresolved"> · 项目未映射</template>
+                <template v-else-if="row.nonCoding"> · 非编码工作</template>
               </template>
             </div>
           </TableCell>

@@ -35,11 +35,45 @@ const tab = ref('entries')
 /** 「待关注」只数真正需要跟进的，口径见 needsFollowUp */
 const problems = computed(() => props.result.entries.filter(needsFollowUp).length)
 
+/** 一致计 1、部分一致计 0.5；这就是分数的分子 */
+const earnedHours = computed(() => {
+  const s = props.result.summary
+  return Math.round((s.matchedHours + s.partialHours * 0.5) * 10) / 10
+})
+
 const scoreHint = computed(() => {
   const s = props.result.summary
   if (s.checkedHours === 0)
     return '当日没有可核对的工作内容'
-  return `基于可核对的 ${s.checkedHours}h 计算`
+  return `加权得分工时 ${earnedHours.value}h ÷ 可核对 ${s.checkedHours}h`
+})
+
+/** 可核对工时占申报工时的比例；分数高但覆盖率低时最容易被误读 */
+const coverage = computed(() => {
+  const s = props.result.summary
+  if (s.totalHours <= 0)
+    return null
+  return Math.round((s.checkedHours / s.totalHours) * 100)
+})
+
+const excludedParts = computed(() => {
+  const s = props.result.summary
+  const parts: Array<{ label: string, hours: number, hint: string }> = []
+  if (s.unresolvedHours > 0) {
+    parts.push({
+      label: '无法核对',
+      hours: s.unresolvedHours,
+      hint: '项目没有映射到 GitLab 仓库，或材料不足；不计入得分',
+    })
+  }
+  if (s.nonCodingHours > 0) {
+    parts.push({
+      label: '非编码工作',
+      hours: s.nonCodingHours,
+      hint: '会议、评审、文档等不产生提交的工作；不计入得分',
+    })
+  }
+  return parts
 })
 
 /**
@@ -67,13 +101,14 @@ const conclusion = computed(() => {
     pieces.push(`${counts.unverified} 条无法核对`)
 
   const orphanText = s.orphanCommitCount > 0 ? `；另有 ${s.orphanCommitCount} 个提交未被日报条目引用` : ''
+  const coverageText = coverage.value === null ? '' : `；可核对覆盖率 ${coverage.value}%`
 
   if (!props.result.entries.length) {
     return s.orphanCommitCount > 0
       ? `当日没有日报记录，但检测到 ${s.orphanCommitCount} 个提交。`
       : '当日既没有日报记录，也没有提交。'
   }
-  return `共 ${props.result.entries.length} 条日报${pieces.length ? `：${pieces.join('、')}` : ''}${orphanText}。`
+  return `共 ${props.result.entries.length} 条日报${pieces.length ? `：${pieces.join('、')}` : ''}${coverageText}${orphanText}。`
 })
 
 const hasAttention = computed(() =>
@@ -86,9 +121,14 @@ const hasAttention = computed(() =>
 <template>
   <div class="space-y-4">
     <!-- 第一屏：分数 + 判定分布 -->
-    <div class="grid gap-4 lg:grid-cols-[minmax(0,17rem)_minmax(0,1fr)]">
+    <div class="grid gap-4 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
       <div class="rounded-lg border bg-card p-4">
-        <div class="text-xs text-muted-foreground">加权符合度</div>
+        <div
+          class="text-xs text-muted-foreground"
+          title="分数 = 加权得分工时 ÷ 可核对工时。一致计 1、部分一致计 0.5；无法核对和非编码工作不计入"
+        >
+          可核对部分符合度
+        </div>
         <!--
           没有可核对的内容时显示「—」而不是 0：
           用红色 0 配上一句「当日没有可核对的工作内容」是自相矛盾的，
@@ -105,6 +145,32 @@ const hasAttention = computed(() =>
           —
         </div>
         <div class="mt-1 text-[11px] text-muted-foreground">{{ scoreHint }}</div>
+
+        <!-- 分数高不代表核对得全：把覆盖率单独摆出来 -->
+        <div v-if="coverage !== null" class="mt-3 space-y-1.5">
+          <div class="flex items-center justify-between text-[11px]">
+            <span class="text-muted-foreground">可核对覆盖率</span>
+            <span class="tabular-nums">
+              <strong class="font-semibold text-foreground">{{ coverage }}%</strong>
+              <span class="text-muted-foreground"> · {{ result.summary.checkedHours }}h / {{ result.summary.totalHours }}h</span>
+            </span>
+          </div>
+          <div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              class="h-full rounded-full bg-primary/60"
+              :style="{ width: `${coverage}%` }"
+            />
+          </div>
+          <div
+            v-for="part in excludedParts"
+            :key="part.label"
+            class="flex items-center justify-between text-[10px] text-muted-foreground"
+            :title="part.hint"
+          >
+            <span>未计入：{{ part.label }}</span>
+            <span class="tabular-nums">{{ part.hours }}h</span>
+          </div>
+        </div>
 
         <p
           :class="cn(
@@ -129,13 +195,16 @@ const hasAttention = computed(() =>
       </div>
 
       <div class="rounded-lg border bg-card p-4">
-        <div class="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <div class="mb-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <span class="text-xs font-medium">判定分布</span>
           <span class="text-[11px] text-muted-foreground">
             {{ result.entries.length }} 条日报 · 待关注
             <span :class="problems ? 'text-amber-600 dark:text-amber-500' : ''">{{ problems }}</span> 条
           </span>
         </div>
+        <p class="mb-2 text-[10px] text-muted-foreground">
+          只有一致 / 部分一致 / 不一致 / 无提交参与得分；无法核对与非编码工作不计入。
+        </p>
         <VerdictBreakdown :entries="result.entries" />
       </div>
     </div>
@@ -143,17 +212,17 @@ const hasAttention = computed(() =>
     <!-- 第二屏：工时对照 + 提交时间线 -->
     <div class="grid gap-4 lg:grid-cols-2">
       <div class="rounded-lg border bg-card p-4">
-        <div class="mb-3 flex items-baseline gap-3">
+        <div class="mb-3 flex flex-wrap items-baseline gap-3">
           <span class="text-xs font-medium">工时对照</span>
-          <span class="text-[11px] text-muted-foreground">申报 / 可核对 / 代码估算</span>
+          <span class="text-[11px] text-muted-foreground">申报 / 可核对 / 代码估算 · 三者口径不同，不参与符合度得分</span>
         </div>
         <WorkloadCompare :summary="result.summary" />
       </div>
 
       <div class="rounded-lg border bg-card p-4">
-        <div class="mb-3 flex items-baseline gap-3">
+        <div class="mb-3 flex flex-wrap items-baseline gap-3">
           <span class="text-xs font-medium">提交时间线</span>
-          <span class="text-[11px] text-muted-foreground">按提交时刻分布，区分是否写进日报</span>
+          <span class="text-[11px] text-muted-foreground">未引用提交仍计入工时估算，但不影响符合度得分</span>
         </div>
         <CommitTimeline
           :entries="result.entries"

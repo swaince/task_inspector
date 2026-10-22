@@ -154,5 +154,11 @@ function round1(n: number) {
         <span class="ml-0.5 tabular-nums text-foreground">{{ item.value }}</span>
       </span>
     </div>
+
+    <p class="text-[10px] leading-relaxed text-muted-foreground">
+      申报含会议、评审等全部工作；可核对只算能对上仓库和提交的部分；
+      代码估算只覆盖提交能体现的代码产出，不含会议、评审、设计。
+      三者口径不同，代码估算不参与上面的符合度得分。
+    </p>
   </div>
 </template>
