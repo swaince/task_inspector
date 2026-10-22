@@ -9,6 +9,7 @@ import {
   FileTextIcon,
   FlameIcon,
   Loader2Icon,
+  MessageSquareIcon,
   RefreshCwIcon,
   SparklesIcon,
   Trash2Icon,
@@ -174,6 +175,15 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
         </div>
 
         <div class="ml-auto flex shrink-0 items-center gap-1.5">
+          <Button
+            variant="outline"
+            size="sm"
+            title="围绕这个项目自由提问"
+            @click="router.push({ name: 'project-chat', params: { id: projectId } })"
+          >
+            <MessageSquareIcon :size="13" class="mr-1.5" />
+            项目对话
+          </Button>
           <Button v-if="profile" variant="ghost" size="sm" :disabled="profileStore.generating" @click="remove">
             <Trash2Icon :size="13" class="mr-1.5" />
             删除画像

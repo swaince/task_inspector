@@ -10,6 +10,13 @@ import 'katex/dist/katex.min.css'
 interface Props {
   content?: string
   class?: HTMLAttributes['class']
+  /**
+   * 内容还在流式追加。
+   *
+   * 报告这类「生成完才渲染」的内容不要开，否则末尾会常驻一个加载圈；
+   * 对话里开着才能看到逐段生成的 Markdown。生成结束后调用方要立刻关掉。
+   */
+  streaming?: boolean
 }
 
 const props = defineProps<Props>()
@@ -35,13 +42,13 @@ const { extensions } = useMarkdownExtensions()
 
 <template>
   <!--
-    mode="static" 是必须的：默认的 streaming 模式会在内容末尾常驻一个加载转圈，
-    报告是一次性生成完再渲染的，不该出现这个「还在生成」的提示。
+    streaming 模式会在内容末尾显示生成中的加载圈，适合对话的实时追加；
+    报告是一次性生成完再渲染的，传 false 走 static，不出现这个「还在生成」的提示。
   -->
   <Markdown
     :content="md"
     :extensions="extensions"
-    mode="static"
+    :mode="streaming ? 'streaming' : 'static'"
     :class="
       cn(
         'size-full [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!',

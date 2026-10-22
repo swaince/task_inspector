@@ -8,6 +8,7 @@ import {
   FileTextIcon,
   FolderGit2Icon,
   Loader2Icon,
+  MessageSquareIcon,
   NetworkIcon,
   PencilIcon,
   PlusIcon,
@@ -454,7 +455,7 @@ onMounted(() => {
               <TableHead class="h-9 w-[8.5rem]">状态</TableHead>
               <TableHead class="h-9 w-[4.5rem]">引用</TableHead>
               <TableHead class="h-9 w-[4.5rem]">关注</TableHead>
-              <TableHead class="h-9 w-[6.5rem]" />
+              <TableHead class="h-9 w-[8rem]" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -539,6 +540,15 @@ onMounted(() => {
 
               <TableCell>
                 <div class="flex items-center gap-0.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="px-1.5"
+                    title="项目对话：问架构、模块、最近开发情况"
+                    @click="router.push({ name: 'project-chat', params: { id: p.id } })"
+                  >
+                    <MessageSquareIcon :size="13" />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"

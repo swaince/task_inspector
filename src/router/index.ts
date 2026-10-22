@@ -79,6 +79,16 @@ const router = createRouter({
       },
     },
     {
+      path: '/projects/:id/chat',
+      name: 'project-chat',
+      component: () => import('@/views/ProjectChatView.vue'),
+      meta: {
+        title: '项目对话',
+        activeName: 'projects',
+        description: '围绕单个项目自由提问：架构、模块、核心功能、最近开发情况',
+      },
+    },
+    {
       path: '/members',
       name: 'members',
       component: () => import('@/views/MembersView.vue'),
