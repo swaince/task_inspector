@@ -26,3 +26,10 @@ dist-ssr
 # Claude Code 本地工作目录：只保留启动配置，归档/截图不入库
 .claude/*
 !.claude/launch.json
+
+# 本地数据库（运行时在应用数据目录），不要入库
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
