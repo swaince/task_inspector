@@ -742,6 +742,28 @@ diff 是点开时单独拉一次的（`commits/:sha/diff`），不在扫描阶�
 - 同一页有「重置数据」：只清业务数据（日报、检查历史、提交、项目、人员，配置保留），
   或者全部重置（连 GitLab / 日报 / 模型配置一起清，等于重新装一遍）。清空不可撤销
 
+## 发布
+
+GitHub Actions 工作流在 `.github/workflows/release.yml`，也可以手动触发（workflow_dispatch）。
+
+| 触发 | Release | 说明 |
+| --- | --- | --- |
+| push `main` | tag `latest`，名称 **Latest** | 滚动发布，每次覆盖同一份 release 的安装包；`latest` 标签会移到最新提交 |
+| push tag `v1.0.0` | tag `v1.0.0`，名称 **1.0.0** | 版本发布；构建时把 Tauri 版本覆盖成 `1.0.0` |
+
+每个平台会产出安装版和免安装版：
+
+- **Windows**：NSIS `*-setup.exe`、MSI `*.msi`、`*_windows_x64_portable.zip`（解压后直接运行，需要系统已安装 WebView2）
+- **macOS**：通用 DMG（Intel 与 Apple Silicon 通用）、`*_macos_universal_portable.zip`（解压后把 `.app` 拖进「应用程序」）
+
+注意事项：
+
+- macOS 产物**未签名、未公证**。首次打开请右键 →「打开」；如果仍被拦截，
+  执行 `xattr -dr com.apple.quarantine /Applications/TaskInspector.app`
+- 版本号来自 tag（`v1.0.0` → `1.0.0`）；main 构建沿用 `package.json` 的版本
+- 工作流会先跑 `pnpm typecheck`，再用 `tauri build` 构建对应目标
+- 正式分发需要签名时，在仓库 Secrets 里配置 Apple / Windows 证书，并在工作流里补上签名步骤
+
 ## 尚未接完的部分
 
 - **检索还没有界面入口。** `search_hybrid` 命令和 FTS5 索引已经可用（有测试覆盖），

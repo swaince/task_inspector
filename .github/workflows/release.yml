@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 统一计算发布标签与版本：tag 用 v 后面的版本号，main 用滚动 latest
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      name: ${{ steps.meta.outputs.name }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="$GITHUB_REF_NAME"
+            VERSION="${TAG#v}"
+            NAME="$VERSION"
+          else
+            TAG="latest"
+            VERSION="$(node -p "require('./package.json').version")"
+            NAME="Latest"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: windows-x64
+          - platform: macos-latest
+            # 通用二进制：一份安装包覆盖 Intel 与 Apple Silicon
+            target: universal-apple-darwin
+            artifact: macos-universal
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # tag 构建用 tag 的版本；main 构建沿用 package.json 的版本
+      - name: Write version override
+        shell: bash
+        run: |
+          node -e "require('fs').writeFileSync('tauri-version.json', JSON.stringify({ version: process.env.APP_VERSION }))"
+        env:
+          APP_VERSION: ${{ needs.meta.outputs.version }}
+
+      - name: Build (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: pnpm tauri build --target ${{ matrix.target }} --config tauri-version.json
+
+      - name: Build (macOS universal)
+        if: matrix.platform == 'macos-latest'
+        run: pnpm tauri build --target ${{ matrix.target }} --config tauri-version.json
+
+      - name: Package portable (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = "${{ needs.meta.outputs.version }}"
+          $exe = "src-tauri/target/${{ matrix.target }}/release/task-inspector.exe"
+          if (!(Test-Path $exe)) { throw "找不到可执行文件：$exe" }
+          New-Item -ItemType Directory -Force -Path portable | Out-Null
+          Copy-Item $exe portable/TaskInspector.exe
+          Compress-Archive -Path portable/TaskInspector.exe -DestinationPath "TaskInspector_${version}_windows_x64_portable.zip" -Force
+
+      - name: Package portable (macOS)
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.meta.outputs.version }}"
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/TaskInspector.app"
+          if [[ ! -d "$APP" ]]; then
+            echo "找不到 app bundle：$APP"
+            exit 1
+          fi
+          # ditto 能保留 .app 里的符号链接和扩展属性，zip 直接压缩容易丢
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "TaskInspector_${VERSION}_macos_universal_portable.zip"
+
+      - name: Upload artifacts (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            TaskInspector_*_windows_x64_portable.zip
+
+      - name: Upload artifacts (macOS)
+        if: matrix.platform == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            TaskInspector_*_macos_universal_portable.zip
+
+  publish:
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh release-assets
+
+      # main 的滚动发布：把 latest 标签移到当前提交，
+      # 这样 release 里的源码包和「Latest」对应的是同一次构建
+      - name: Point latest tag at this commit
+        if: needs.meta.outputs.tag == 'latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PATCH "repos/${{ github.repository }}/git/refs/tags/latest" \
+            -f sha="${{ github.sha }}" -F force=true \
+          || gh api --method POST "repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/tags/latest" -f sha="${{ github.sha }}"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: ${{ needs.meta.outputs.name }}
+          make_latest: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: release-assets/**
+          body: |
+            ## 研发工作核查 ${{ needs.meta.outputs.name }}
+
+            - 提交：`${{ github.sha }}`
+            - 构建记录：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ### 安装包
+
+            - **Windows**：`*-setup.exe`（NSIS 安装版）、`*.msi`（MSI 安装版）、`*_portable.zip`（免安装，解压后直接运行）
+            - **macOS**：`*.dmg`（通用版，Intel 与 Apple Silicon 通用）、`*_portable.zip`（免安装 `.app`）
+
+            > macOS 版本未签名。首次打开请右键 →「打开」；
+            > 若仍被拦截，执行 `xattr -dr com.apple.quarantine /Applications/TaskInspector.app`。
+            >
+            > Windows 免安装版需要系统已安装 WebView2（Windows 11 自带，Windows 10 通常已随 Edge 安装）。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
