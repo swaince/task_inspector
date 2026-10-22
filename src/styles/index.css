@@ -1,0 +1,11 @@
+/*
+ * 样式入口，只做聚合，不写具体规则。
+ *
+ * 加载顺序有语义：
+ *   tailwind.css —— shadcn-vue CLI 生成的设计令牌与基础层。禁止手工编辑，
+ *                   改动会在下次 `shadcn-vue init` 时丢失。需要调整默认值请写在 theme.css。
+ *   theme.css    —— 应用自己的主题覆盖与样式。同优先级下后加载者胜出，
+ *                   所以这里的值会盖住脚手架给的默认值。
+ */
+@import "./tailwind.css";
+@import "./theme.css";

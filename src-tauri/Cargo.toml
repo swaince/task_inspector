@@ -1,0 +1,54 @@
+[package]
+name = "task-inspector"
+version = "0.1.0"
+description = "研发工作核查：核对日报申报内容与 GitLab 实际提交是否一致"
+authors = ["task-inspector"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+[lib]
+name = "task_inspector_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.4", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+
+# 存储 key 里含中文与日期，用 base64url 编码成安全的文件名并保证可逆
+base64 = "0.22"
+
+# 网络请求全部在 Rust 侧发出：内网 GitLab 通常不带 CORS 头，
+# 而且 Token 留在 Rust 侧就不会进入 webview 的 JS 上下文。
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["sync", "time"] }
+
+# 本地持久化。bundled 特性会把 SQLite 源码一起编进来，
+# 不依赖目标机器上的系统库，打包分发时少一个变量。
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+# LDAP 人员同步。纯 Rust 实现，默认特性带 sync（阻塞 API）和 tls（native-tls，
+# Windows 上走 schannel，不需要额外装 OpenSSL）。
+ldap3 = { version = "0.12", features = ["sync", "tls-native"] }
+
+[features]
+# 由 tauri-build 使用，保持默认即可
+default = []
+
+# 发布包体积优化，取自 Tauri 官方模板：
+# https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

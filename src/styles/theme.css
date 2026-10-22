@@ -1,0 +1,149 @@
+/*
+ * 自定义主题层。
+ *
+ * 在 tailwind.css（脚手架生成的设计令牌）之后加载，同优先级下后者胜出，
+ * 所以这里既能覆盖脚手架给的默认值，也能补充应用自己的令牌。
+ * 本文件不参与任何脚手架生成流程，可以放心编辑。
+ *
+ * 只放「主题级」的东西：设计令牌、基础层调整、通用工具类。
+ * 单个组件的样式写在该组件里，不要往这里堆。
+ */
+
+/* ------------------------------------------------------------------ *
+ * 设计令牌
+ * ------------------------------------------------------------------ */
+
+@theme inline {
+  /*
+   * 字体用系统自带栈，不引入 Web Font。
+   * 脚手架默认会给 --font-sans 指向 Geist，并 @import 一个 Google Fonts 地址；
+   * 那个外联请求会被生产环境的 CSP 拦掉，字体静默回退反而更难排查，
+   * 所以构建期就把那行 import 剥掉了（见 vite.config.ts 的 scaffoldCssShim），
+   * 在这里换成系统字体栈。--font-heading 引用 var(--font-sans)，会跟着一起生效。
+   */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+    'Hiragino Sans GB', 'Source Han Sans SC', 'Noto Sans CJK SC', sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: ui-monospace, 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas,
+    'Courier New', monospace;
+
+  /*
+   * 判定档位的语义色。
+   * 在这里注册成 Tailwind 颜色，就能用 text-verdict-matched 这类工具类；
+   * 同时 :root 里也留了同名变量，供内联 style 和图表直接取用。
+   */
+  --color-verdict-matched: var(--verdict-matched);
+  --color-verdict-partial: var(--verdict-partial);
+  --color-verdict-mismatched: var(--verdict-mismatched);
+  --color-verdict-nocommit: var(--verdict-nocommit);
+  --color-verdict-unverified: var(--verdict-unverified);
+}
+
+:root {
+  --verdict-matched: oklch(0.62 0.16 149.6);
+  --verdict-partial: oklch(0.75 0.16 85);
+  --verdict-mismatched: oklch(0.6 0.22 25.5);
+  --verdict-nocommit: oklch(0.62 0.19 259.8);
+  --verdict-unverified: oklch(0.62 0.02 286);
+}
+
+/* 深色背景下要提高亮度，否则低饱和的色相在暗底上会糊成一片 */
+.dark {
+  --verdict-matched: oklch(0.7 0.16 149.6);
+  --verdict-partial: oklch(0.8 0.15 85);
+  --verdict-mismatched: oklch(0.68 0.2 25.5);
+  --verdict-nocommit: oklch(0.7 0.17 259.8);
+  --verdict-unverified: oklch(0.7 0.02 286);
+}
+
+/* ------------------------------------------------------------------ *
+ * 基础层
+ * ------------------------------------------------------------------ */
+
+@layer base {
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    /* 桌面应用不需要整页滚动，滚动交给内层容器，避免出现两层滚动条 */
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 按钮类元素的文字不该被框选拖动 */
+  button,
+  [role='button'] {
+    @apply select-none;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 工具类
+ * ------------------------------------------------------------------ */
+
+@layer utilities {
+  /* 桌面端标题栏拖拽区域 */
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 数据表：表头随滚动固定
+ * ------------------------------------------------------------------ */
+
+/*
+ * shadcn 的 Table 外层容器带 `overflow-x-auto`。按 CSS 的计算规则，另一轴会
+ * 跟着变成 auto，于是它成了一个「高度自适应」的滚动容器——表头的 sticky 会被
+ * 限制在这个本身不纵向滚动的容器里，等于失效。
+ *
+ * 这里给它一个有界高度（留 28rem 给页面上方的统计卡、筛选栏和底部分页条），
+ * 让它自己成为纵向滚动容器：表头钉在顶部，页面其余部分照常滚动；
+ * 横向滚动保留，宽表仍然可以左右拖。
+ */
+[data-slot="table-container"] {
+  max-height: calc(100vh - 28rem);
+  overflow: auto;
+  /* 表格内滚到底时不要再把滚动传给页面，否则表头会被一起带出视口 */
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/*
+ * 报告里的对比表行数有限（按项目、按仓库），让它跟着内容展开。
+ * 套一层内部滚动会把整张表切成几行，反而看不出对比关系。
+ */
+.table-expand [data-slot="table-container"] {
+  max-height: none;
+  overflow-y: visible;
+}
+
+[data-slot="table-container"] thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  /*
+   * 卡片里的表格用卡片底色，页面上的表格用页面底色，再各自掺一点前景色，
+   * 让表头和下面的行有区分，滚到表头下面时不会糊成一片。
+   */
+  background-color: color-mix(in oklab, var(--background) 94%, var(--foreground));
+  /* sticky 之后行底边框会跟着滚走，用内阴影补一条分隔线 */
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.bg-card [data-slot="table-container"] thead th {
+  background-color: color-mix(in oklab, var(--card) 94%, var(--foreground));
+}
