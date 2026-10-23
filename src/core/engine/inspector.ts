@@ -34,6 +34,7 @@ import {
   truncate,
 } from './prompt'
 import { commitWindow, isCoreWindow } from './window'
+import { collectBranchCommits } from './branchCommits'
 import type { DayMetrics } from './metrics'
 import { dayMetrics, groupedDayMetrics, saturationOf } from './metrics'
 
@@ -215,18 +216,9 @@ export async function runInspection(
         const query: CommitQuery = {
           since: window.since,
           until: window.until,
-          // 只看仓库的默认分支，避免把未合入的分支提交算成当天的工作
-          refName: project.defaultBranch,
           /*
-           * 不传 `author` 过滤。
-           *
-           * 一个人可能有多个 Git 身份（换过账号、用中文名提交、用私人邮箱），
-           * 而 author 参数只接受一个值——传了就会漏掉其它身份提交的代码，
-           * 而漏提交会被判成「日报写了但代码没有」，方向正好反了。
-           * 这里拉回整个时间窗的提交，再用 commitBelongsTo 在客户端筛。
-           *
-           * 代价是单仓库的提交量上限（maxCommitsPerProject）现在约束的是
-           * 所有人的提交而不是某个人的；这个值在判定规则里可调。
+           * 不指定 refName：由收集层遍历区间内有提交的全部分支。
+           * 只看默认分支会漏掉功能分支上当天的工作。
            */
           perPage: settings.gitlab.perPage,
           maxCommits: settings.rules.maxCommitsPerProject,
@@ -237,7 +229,7 @@ export async function runInspection(
         // 列表按日期 + 仓库缓存；同一仓库同一天被多个成员检查时只请求一次。
         const raw = deps.fetchCommits
           ? await deps.fetchCommits(project, query)
-          : await deps.gitlab.listCommits(project, query)
+          : (await collectBranchCommits(deps.gitlab, project, query, { maxBranches: 24 })).commits
 
         /*
          * 先筛出本人的提交，再只给这些提交补 diff。
@@ -562,6 +554,7 @@ function toEvidence(commit: GitCommit, entry: DailyReportEntry, relevance: strin
     webUrl: commit.webUrl,
     files: (commit.fileChanges ?? []).slice(0, 12).map(f => f.path),
     relevance: relevance || `该提交位于日报所述项目「${entry.projectName}」中，可能是描述对应的改动`,
+    branches: commit.branches,
   }
 }
 

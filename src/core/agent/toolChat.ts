@@ -368,6 +368,9 @@ function buildPlannerPrompt(
   if (tools.some(tool => tool.id === 'projects.list' || tool.id === 'projects.ensure')) {
     rules.push('项目与 GitLab 关联问题先查 projects.list；需要新增关联时用 projects.ensure，已存在会忽略。它不会在 GitLab 侧创建组或仓库。')
   }
+  if (tools.some(tool => tool.id === 'projects.branches')) {
+    rules.push('涉及代码结构、提交、画像或「在哪个分支」的问题，先用 projects.branches 看每个仓库的最近提交分支、默认分支、本地当前分支和画像分析分支；画像优先分析最近提交的分支，不要假设一定是默认分支。')
+  }
   if (hasShell) {
     rules.push('命令只作为兜底：项目资料和代码工具无法回答、或必须实际运行才能确认时再使用；优先只读命令。')
     rules.push('每条命令都会等待用户确认；不要为了省调用次数而跳过必要的检查。不要安装、发布、推送、部署或运行需要交互输入的命令，除非用户在当前问题里明确要求。')

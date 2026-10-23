@@ -6,6 +6,7 @@ import type {
   LlmChatRequest,
   LlmStreamEvent,
   ProfileRow,
+  RepoBranches,
   ShellEvent,
   ShellRunRequest,
   ShellRunResult,
@@ -273,6 +274,21 @@ export function createTauriTransport(): Transport {
     async gitHead(path) {
       const { invoke } = await core()
       return invoke('git_head', { path })
+    },
+
+    async gitBranches(path) {
+      const { invoke } = await core()
+      return invoke<RepoBranches>('git_branches', { path })
+    },
+
+    async gitWorktreeAdd(path, reference) {
+      const { invoke } = await core()
+      return invoke<string>('git_worktree_add', { path, reference })
+    },
+
+    async gitWorktreeRemove(path, worktree) {
+      const { invoke } = await core()
+      await invoke('git_worktree_remove', { path, worktree })
     },
 
     async ensureDirs(root, paths) {

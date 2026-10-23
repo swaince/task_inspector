@@ -51,12 +51,33 @@ interface RawGitLabGroup {
   web_url?: string
 }
 
+interface RawGitLabBranch {
+  name: string
+  default?: boolean
+  merged?: boolean
+  protected?: boolean
+  commit?: {
+    id?: string
+    committed_date?: string
+  }
+}
+
 /** 项目关联选择器用的组结果 */
 export interface GitLabGroupRef {
   id: number
   name: string
   fullPath: string
   webUrl?: string
+}
+
+export interface GitLabBranchRef {
+  name: string
+  default: boolean
+  merged: boolean
+  protected: boolean
+  commitId?: string
+  /** 分支最新一次提交时间（ISO） */
+  committedDate?: string
 }
 
 interface RawGitLabDiff {
@@ -293,6 +314,47 @@ export class GitLabClient {
   async getProject(pathWithNamespace: string): Promise<GitLabProjectRef> {
     const raw = await this.get<RawGitLabProject>(`/projects/${encodeURIComponent(pathWithNamespace)}`)
     return this.toProjectRef(raw)
+  }
+
+  /**
+   * 列出项目分支及每个分支最新提交时间。
+   *
+   * 分析不能只看默认分支：功能分支上的近期提交同样是事实。
+   * 分页拉全，但设一个上限，避免超多分支的仓库拖垮一次检查。
+   */
+  async listBranches(
+    project: GitLabProjectRef,
+    opts: { maxBranches?: number, signal?: AbortSignal } = {},
+  ): Promise<GitLabBranchRef[]> {
+    const maxBranches = opts.maxBranches ?? 300
+    const out: GitLabBranchRef[] = []
+    let page = 1
+
+    while (out.length < maxBranches) {
+      if (opts.signal?.aborted)
+        break
+      const raw = await this.get<RawGitLabBranch[]>(
+        `/projects/${project.id}/repository/branches`,
+        { per_page: 100, page },
+      )
+      for (const item of raw) {
+        if (out.length >= maxBranches)
+          break
+        out.push({
+          name: item.name,
+          default: item.default === true,
+          merged: item.merged === true,
+          protected: item.protected === true,
+          commitId: item.commit?.id,
+          committedDate: item.commit?.committed_date,
+        })
+      }
+      if (raw.length < 100)
+        break
+      page++
+    }
+
+    return out
   }
 
   /**

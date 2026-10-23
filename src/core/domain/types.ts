@@ -278,6 +278,8 @@ export interface GitCommit {
   webUrl: string
   /** 这条提交是从哪条分支拉到的。没有它，界面上没法回答「算的是哪条线」 */
   refName?: string
+  /** 同一条提交可能同时存在于多个分支；去重后记录全部来源 */
+  branches?: string[]
   /** 提交规模，用于判断是否为实质性工作（区分格式化/合并提交） */
   stats?: { additions: number, deletions: number, total: number }
   fileChanges?: CommitFileChange[]
@@ -323,6 +325,8 @@ export interface InspectionEvidence {
   files: string[]
   /** 该提交与日报描述的关联点，一句话 */
   relevance: string
+  /** 提交所在分支；同一个提交可能同时存在于多个分支 */
+  branches?: string[]
 }
 
 export interface EntryInspection {

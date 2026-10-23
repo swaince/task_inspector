@@ -281,6 +281,7 @@ async function analyze() {
       from: from.value,
       to: to.value,
       rows: rows.value,
+      branches: batches.flatMap(b => b.branches ?? []),
       failures: failures.value,
       estimate: estimate.value,
       analyzedAt: analyzedAt.value ?? '',
@@ -629,6 +630,22 @@ const REPORT_SYSTEM = `你是研发效能分析师。根据一个人在给定时
 const report = computed(() => activityStore.snapshot?.report ?? '')
 const reportAt = computed(() => activityStore.snapshot?.reportAt ?? null)
 
+/** 此人在区间内提交涉及的分支，按提交数排序 */
+const memberBranches = computed(() => {
+  const map = new Map<string, { repo: string, branch: string, commits: number }>()
+  for (const row of rows.value) {
+    for (const commit of row.commits) {
+      for (const branch of commit.branches ?? []) {
+        const key = `${row.projectPath}\u0000${branch}`
+        const hit = map.get(key) ?? { repo: row.projectPath, branch, commits: 0 }
+        hit.commits++
+        map.set(key, hit)
+      }
+    }
+  }
+  return [...map.values()].sort((a, b) => b.commits - a.commits)
+})
+
 function buildReportPrompt(): string {
   const member = selected.value
   const dayLines = byDay.value.map(d =>
@@ -651,10 +668,37 @@ function buildReportPrompt(): string {
     .map(r => `${formatDateCN(r.date)} ${r.projectName}：${r.reportedHours}h — ${r.reportedContents.join('；') || '（未填写内容）'}`)
 
   const recent = rows.value
-    .flatMap(r => r.commits.map(c => `${formatDateCN(r.date)} ${c.title}`))
+    .flatMap(r => r.commits.map(c => {
+      const branches = c.branches?.length ? ` [分支 ${c.branches.join('、')}]` : ''
+      return `${formatDateCN(r.date)}${branches}：${c.title}`
+    }))
     .sort()
     .reverse()
     .slice(0, 25)
+
+  /*
+   * 一个人可能在多个分支上同时推进工作。只按分支汇总他自己的提交，
+   * 不用仓库级分支统计——那是项目活动视图的口径。
+   */
+  const branchMap = new Map<string, { repo: string, branch: string, commits: number, latest: string, titles: string[] }>()
+  for (const r of rows.value) {
+    for (const c of r.commits) {
+      for (const branch of c.branches ?? []) {
+        const key = `${r.projectPath}\u0000${branch}`
+        const hit = branchMap.get(key) ?? { repo: r.projectPath, branch, commits: 0, latest: r.date, titles: [] }
+        hit.commits++
+        if (r.date > hit.latest)
+          hit.latest = r.date
+        if (hit.titles.length < 3)
+          hit.titles.push(c.title)
+        branchMap.set(key, hit)
+      }
+    }
+  }
+  const branchLines = [...branchMap.values()]
+    .sort((a, b) => b.commits - a.commits)
+    .slice(0, 30)
+    .map(b => `${b.repo} / ${b.branch}：${b.commits} 条，最近 ${formatDateCN(b.latest)}；近期：${b.titles.join('；')}`)
 
   /*
    * 图表要按完整日序列画，包括没有记录的天；只给有数据的日子，
@@ -672,8 +716,10 @@ function buildReportPrompt(): string {
     + `按天：\n${dayLines.join('\n') || '（无）'}\n\n`
     + `按项目：\n${projectLines.join('\n') || '（无）'}\n\n`
     + `日报申报内容：\n${declared.join('\n') || '（无）'}\n\n`
+    + `分支工作（此人在这段时间的提交分布）：\n${branchLines.join('\n') || '（无分支信息）'}\n\n`
     + `最近的提交标题：\n${recent.join('\n') || '（无）'}\n\n`
     + `每日序列（含无记录的天）：\n${chartDays.join('\n') || '（无）'}\n\n`
+    + `统计范围覆盖区间内有提交的所有分支，不是只看默认分支；分析时要注明这个人在哪个分支做了什么。\n`
     + `判断「有申报无提交」的日子时，以「日报申报内容」为准：里面写了需求文档、架构设计、评审、`
     + `会议、答疑这类工作，就属于非编码工作，不要笼统写成「未提供工作内容」。\n`
     + `周末和法定节假日没有提交、没有日报是正常的，不要写成漏报或缺勤；活跃天数、无记录天数都只按工作日计算。\n\n`
@@ -692,6 +738,9 @@ function buildReportPrompt(): string {
     + `表格之后，再输出一个 donut 图表展示各项目的申报工时占比：\n`
     + '```chart\n{"type":"donut","title":"项目投入占比","unit":"h","labels":["项目A","项目B"],"series":[{"name":"申报工时","data":[51,6]}]}\n```\n'
     + `数据用各项目的申报工时，labels 与表格里的项目一一对应。\n\n`
+    + `## 分支工作\n`
+    + `一张表格：| 仓库 | 分支 | 提交 | 最近提交 | 在做什么 |，用上面的「分支工作」逐行输出；`
+    + `没有分支信息时写「数据不足」。\n\n`
     + `## 与日报的对照\n`
     + `一张表格：| 日期 | 项目 | 问题 | 依据 |，只列异常（有提交未申报 / 已申报无提交 / 无记录）。\n\n`
     + `## 建议\n不超过 3 条列表，每条一句话。`
@@ -816,6 +865,20 @@ async function generateReport() {
             <SparklesIcon :size="11" />
             估算置信度 {{ Math.round(estimate.confidence * 100) }}%
           </span>
+        </div>
+
+        <div v-if="memberBranches.length" class="flex flex-wrap items-center gap-1.5">
+          <span class="text-[11px] text-muted-foreground">涉及分支</span>
+          <Badge
+            v-for="b in memberBranches"
+            :key="`${b.repo}|${b.branch}`"
+            variant="secondary"
+            class="text-[11px] font-normal"
+            :title="b.repo"
+          >
+            {{ b.repo.split('/').pop() }} · {{ b.branch }}
+            <span class="ml-1 text-muted-foreground tabular-nums">{{ b.commits }} 条</span>
+          </Badge>
         </div>
 
         <div class="flex flex-wrap items-center gap-1.5">
@@ -954,6 +1017,9 @@ async function generateReport() {
                         >
                           <span class="text-muted-foreground">{{ fmtTime(c.authoredDate) }}</span>
                           {{ c.title }}
+                          <span v-if="c.branches?.length" class="ml-1 text-[10px] text-muted-foreground">
+                            {{ c.branches.slice(0, 2).join(' / ') }}
+                          </span>
                         </button>
                         <div v-if="stat.commits.length > 1" class="text-[11px] text-muted-foreground">
                           另 {{ stat.commits.length - 1 }} 条，点开看全部
@@ -1005,6 +1071,12 @@ async function generateReport() {
                                 <span class="shrink-0 tabular-nums text-muted-foreground">{{ fmtTime(c.authoredDate) }}</span>
                                 <span class="shrink-0 font-mono text-[10px] text-muted-foreground">{{ c.shortId }}</span>
                                 <span class="truncate">{{ c.title }}</span>
+                                <span
+                                  v-if="c.branches?.length"
+                                  class="shrink-0 font-mono text-[10px] text-muted-foreground"
+                                >
+                                  {{ c.branches.slice(0, 2).join(' / ') }}
+                                </span>
                                 <span
                                   v-if="c.stats"
                                   class="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground"

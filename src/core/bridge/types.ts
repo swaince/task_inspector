@@ -266,6 +266,28 @@ export interface Hotspot {
   changes: number
 }
 
+export interface RepoBranch {
+  name: string
+  sha: string
+  /** 来自 refs/remotes/origin/* */
+  remote: boolean
+  current: boolean
+  default: boolean
+  latest: boolean
+  /** 最近一次提交时间（ISO） */
+  committedAt: string
+}
+
+export interface RepoBranches {
+  current: string | null
+  defaultBranch: string | null
+  /** 最近提交的分支名 */
+  latestBranch: string | null
+  /** 用于创建 worktree 的完整引用 */
+  latestRef: string | null
+  branches: RepoBranch[]
+}
+
 /** 项目画像的存储行：payload 是前端定义的画像 JSON */
 export interface ProfileRow {
   projectId: string
@@ -304,6 +326,11 @@ export interface Transport extends DataStore {
   gitHotspots(path: string, days: number): Promise<Hotspot[]>
   /** 当前 HEAD；没有 git 仓库时返回空串 */
   gitHead(path: string): Promise<string>
+  /** 本地与远程分支引用；画像用它确认默认分支 */
+  gitBranches(path: string): Promise<RepoBranches>
+  /** 为一个引用创建临时 worktree，返回目录；用于不改工作区地分析默认分支 */
+  gitWorktreeAdd(path: string, reference: string): Promise<string>
+  gitWorktreeRemove(path: string, worktree: string): Promise<void>
   /** 在代码根目录下按仓库路径递归建目录，返回实际新建的路径 */
   ensureDirs(root: string, paths: string[]): Promise<string[]>
   /** 浅克隆仓库；目录里已有内容时跳过（skipped=true） */

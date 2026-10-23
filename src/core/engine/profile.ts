@@ -1,8 +1,11 @@
 import type { Hotspot, LlmChatMessage, RepoScan } from '../bridge/types'
-import type { LlmSettings } from '../config/settings'
+import type { LlmSettings, GitLabSettings } from '../config/settings'
 import type { Project, ProjectRepo } from '../domain/types'
+import type { BranchActivity } from './branchCommits'
+import { GitLabClient } from '../adapters/gitlab'
 import { transport } from '../bridge'
 import { createLlmClient } from '../llm/client'
+import { collectBranchCommits } from './branchCommits'
 
 /**
  * 项目代码画像。
@@ -71,6 +74,27 @@ export interface RepoProfile {
   repoPath: string
   /** 实际扫描的本地目录 */
   localPath: string
+  /** 生成画像时工作区所在分支 */
+  currentBranch?: string
+  /** GitLab / origin 认定的默认分支 */
+  defaultBranch?: string
+  /** 最近提交时间最晚的分支 */
+  latestBranch?: string
+  /** 最新分支的最近提交时间 */
+  latestCommitAt?: string
+  /** 实际用于分析的引用；和 currentBranch 不同说明用了临时工作树 */
+  analyzedBranch?: string
+  /** 本地和远程分支引用名，供报告和对话引用 */
+  branches?: string[]
+  /**
+   * 近期每个分支各自做了什么：提交数、最近时间和几条标题。
+   * 画像的代码结构仍取最新提交分支，但分支工作必须全量列出，避免把别的分支的活写没了。
+   */
+  branchWork?: BranchActivity[]
+  /** 分支工作统计的时间窗（天） */
+  branchWorkDays?: number
+  /** 分支工作拉取失败的原因；为空表示成功或未启用 */
+  branchWorkError?: string
   files: number
   truncated: boolean
   modules: ProfileModule[]
@@ -105,7 +129,7 @@ export interface ProfileOptions {
   skills: string[]
   llm: LlmSettings
   /** GitLab 连接信息：本地缺代码时用来克隆。不传就只认本地已有代码 */
-  gitlab?: { baseUrl: string, token: string }
+  gitlab?: GitLabSettings
   /** 缺少本地代码时自动浅克隆 */
   autoClone?: boolean
   /** 浅克隆深度（提交数），0 = 完整克隆 */
@@ -794,23 +818,119 @@ export async function buildRepoProfile(
   if (!found)
     return { ...base, error: '没有可扫描的本地代码目录。' }
 
+  // localPath 始终保留用户 checkout；分析默认分支时用的是临时 worktree
   base.localPath = found.path
-  base.files = found.scan.files.length
-  base.truncated = found.scan.truncated
+
+  let scan = found.scan
+  let scanPath = found.path
+  let cleanupWorktree: (() => Promise<void>) | null = null
+
+  try {
+    const branches = await transport().gitBranches(found.path)
+    base.currentBranch = branches.current ?? undefined
+    base.defaultBranch = repo.defaultBranch || branches.defaultBranch || undefined
+    base.latestBranch = branches.latestBranch ?? undefined
+    base.latestCommitAt = branches.latestBranch
+      ? branches.branches.find(branch => branch.latest)?.committedAt
+      : undefined
+    base.branches = [...new Set(branches.branches.map(branch => branch.name))]
+
+    // 优先分析最近提交的分支；没有最新信息时退回默认分支
+    const targetBranch = branches.latestBranch || base.defaultBranch
+    const targetRef = branches.latestBranch
+      ? (branches.latestRef || branches.latestBranch)
+      : (base.defaultBranch ? `origin/${base.defaultBranch}` : undefined)
+
+    if (targetBranch && branches.current !== targetBranch && targetRef) {
+      opts.onProgress?.(
+        `当前目录在 ${branches.current || 'detached HEAD'}，改用最近提交的分支 ${targetBranch} 的临时工作树分析…`,
+      )
+      try {
+        const worktree = await transport().gitWorktreeAdd(found.path, targetRef)
+        const rescan = await transport().scanRepo(worktree)
+        if (!rescan.files.length)
+          throw new Error('目标分支工作树里没有可分析的文件')
+        scan = rescan
+        scanPath = worktree
+        base.analyzedBranch = targetBranch
+        cleanupWorktree = async () => transport().gitWorktreeRemove(found.path, worktree)
+      }
+      catch (err) {
+        return {
+          ...base,
+          error: `当前目录在分支 ${branches.current || '(detached)'}，目标是最近提交的分支 ${targetBranch}；`
+            + `创建临时工作树失败：${err instanceof Error ? err.message : String(err)}。`
+            + '请确认该分支引用存在，或把工作区切到目标分支。',
+        }
+      }
+    }
+    else {
+      base.analyzedBranch = branches.current ?? targetBranch
+    }
+  }
+  catch {
+    // 不是 git 仓库、或 git 不可用时，按普通目录扫描；没有分支信息
+    base.analyzedBranch = undefined
+  }
+
+  /*
+   * 分支工作靠 GitLab 接口统计：本地仓库可能只 checkout 了一个分支，
+   * 用本地 ref 会漏掉别人在功能分支上的提交。拉不到也不影响画像主体，
+   * 失败原因挂在 repo 上，报告会注明「分支信息不完整」。
+   */
+  const branchDays = opts.hotDays ?? DEFAULT_HOT_DAYS
+  base.branchWorkDays = branchDays
+  if (opts.gitlab?.baseUrl.trim() && opts.gitlab.token.trim() && repo.id > 0) {
+    opts.onProgress?.(`正在统计 ${repo.pathWithNamespace} 各分支的提交…`)
+    try {
+      const result = await collectBranchCommits(
+        new GitLabClient(opts.gitlab),
+        {
+          id: repo.id,
+          pathWithNamespace: repo.pathWithNamespace,
+          name: repo.name,
+          webUrl: repo.webUrl,
+          defaultBranch: repo.defaultBranch,
+        },
+        {
+          since: new Date(Date.now() - branchDays * 86_400_000).toISOString(),
+          until: new Date().toISOString(),
+          perPage: opts.gitlab.perPage,
+          maxCommits: 200,
+          fetchFileChanges: false,
+          signal: opts.signal,
+        },
+        { maxBranches: 20 },
+      )
+      base.branchWork = result.branches
+      if (result.failures.length)
+        base.branchWorkError = result.failures.slice(0, 3).join('；')
+    }
+    catch (err) {
+      base.branchWorkError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  base.files = scan.files.length
+  base.truncated = scan.truncated
 
   let hot: Hotspot[] = []
   try {
-    hot = await transport().gitHotspots(found.path, opts.hotDays ?? DEFAULT_HOT_DAYS)
+    hot = await transport().gitHotspots(scanPath, opts.hotDays ?? DEFAULT_HOT_DAYS)
   }
   catch {
     // 没有 .git 或 git 不可用时只是少了热点，不影响结构分析
   }
+  finally {
+    if (cleanupWorktree)
+      await cleanupWorktree()
+  }
   base.hotFiles = hot.slice(0, 20)
 
-  const resolver = createResolver(found.scan)
-  const modules = buildModules(found.scan, hot, resolver)
-  const graph = buildGraph(found.scan, modules, resolver)
-  const findings = buildFindings(found.scan, modules, graph, hot)
+  const resolver = createResolver(scan)
+  const modules = buildModules(scan, hot, resolver)
+  const graph = buildGraph(scan, modules, resolver)
+  const findings = buildFindings(scan, modules, graph, hot)
 
   const budget = opts.maxModules ?? DEFAULT_MAX_MODULES
   const described = modules.slice(0, budget)
@@ -853,8 +973,28 @@ async function buildReport(
       + `标记 ${Object.keys(m.flags).join('/') || '无'}；${m.summary || '（无描述）'}`,
     )
     const edges = repo.graph.edges.slice(0, 25).map(e => `${e.from} → ${e.to}（${e.weight}）`)
+    const branchText = [
+      repo.defaultBranch ? `默认分支 ${repo.defaultBranch}` : '',
+      repo.latestBranch ? `最近提交分支 ${repo.latestBranch}${repo.latestCommitAt ? `（${repo.latestCommitAt}）` : ''}` : '',
+      repo.currentBranch ? `本地当前 ${repo.currentBranch}` : '',
+      repo.analyzedBranch ? `画像分析 ${repo.analyzedBranch}` : '',
+      repo.branches?.length ? `分支引用 ${repo.branches.length} 个` : '',
+    ].filter(Boolean).join('；')
+    /*
+     * 每个分支单独列一段，并带上最近提交标题：只说「有多少分支」
+     * 等于什么都没说，报告要能写出「A 分支在做 X，B 分支在做 Y」。
+     */
+    const branchWork = (repo.branchWork ?? []).length
+      ? `\n近 ${repo.branchWorkDays ?? DEFAULT_HOT_DAYS} 天分支工作：\n`
+        + repo.branchWork!.map(b => `- ${b.name}${b.default ? '（默认）' : ''}${b.merged ? '（已合并）' : ''}：`
+          + `${b.commits} 条提交，最近 ${b.latestCommitAt ?? '未知'}；`
+          + `近期内容：${b.titles.join('；') || '（无标题）'}`).join('\n')
+        + (repo.branchWorkError ? `\n（部分分支拉取失败：${repo.branchWorkError}）` : '')
+      : ''
     sections.push(
       `仓库：${repo.repoPath}\n文件数：${repo.files}，模块数：${repo.modules.length}\n`
+      + (branchText ? `分支：${branchText}\n` : '')
+      + branchWork
       + `模块：\n${modules.join('\n')}\n\n主要依赖边：\n${edges.join('\n') || '（无）'}`,
     )
   }
@@ -874,7 +1014,9 @@ async function buildReport(
       role: 'user',
       content: `项目：${project.name}${project.code ? `（${project.code}）` : ''}\n\n`
         + `${sections.join('\n\n')}\n\n统计层面的问题清单：\n${findingsText}\n\n`
-        + `请输出包含以下二级标题的报告：## 项目概览 / ## 架构与依赖 / ## 核心模块 / ## 风险与问题 / ## 建议。`
+        + `请输出包含以下二级标题的报告：## 项目概览 / ## 分支工作 / ## 架构与依赖 / ## 核心模块 / ## 风险与问题 / ## 建议。`
+        + `「分支工作」一节必须逐个列出近段时间有提交的分支，写清每个分支各自在做什么；`
+        + `没有分支数据时写「数据不足」，不要只分析默认分支。`
         + `总长度 800~1500 字，不要使用一级标题。`,
     },
   ]

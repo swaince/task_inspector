@@ -24,6 +24,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'approve'): void
+  (e: 'approve-all'): void
   (e: 'deny'): void
 }>()
 
@@ -100,13 +101,25 @@ const approveLabel = computed(() => props.approval.kind === 'shell' ? '允许执
     <p class="mt-2 text-[11px] leading-relaxed text-muted-foreground">
       {{ warning }}
     </p>
+    <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+      选择「本次回答内全部允许」后，这次回答后续的{{ approval.kind === 'shell' ? '命令和' : '' }}成员/项目写操作不再逐条弹卡片；新的提问会恢复确认。
+    </p>
 
-    <div class="mt-3 flex items-center justify-end gap-2">
+    <div class="mt-3 flex flex-wrap items-center justify-end gap-2">
       <span class="mr-auto text-[10px] text-muted-foreground">
         也可以点输入框右侧的停止按钮取消整个回答
       </span>
       <Button variant="outline" size="sm" :disabled="busy" @click="emit('deny')">
         拒绝
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        :disabled="busy"
+        :class="high ? 'border-red-500/50 text-red-700 dark:text-red-400' : ''"
+        @click="emit('approve-all')"
+      >
+        {{ approval.kind === 'shell' ? '后续命令全部允许' : '本次回答内全部允许' }}
       </Button>
       <Button
         :variant="high ? 'destructive' : 'default'"

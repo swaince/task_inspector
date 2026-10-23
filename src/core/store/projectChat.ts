@@ -1,7 +1,7 @@
 import type { LlmChatMessage } from '../bridge/types'
 import type { AnalysisMcpServer, AppSettings, LlmSettings } from '../config/settings'
 import type { ProjectContext } from '../engine/projectContext'
-import type { ApprovalDecision, ApprovalRequest, BuiltinTool } from '../agent/types'
+import type { ApprovalDecision, ApprovalKind, ApprovalRequest, BuiltinTool } from '../agent/types'
 import type { ToolTrace } from '../agent/toolChat'
 import type { GitLabClient } from '../adapters/gitlab'
 import { defineStore } from 'pinia'
@@ -180,6 +180,26 @@ export const useProjectChatStore = defineStore('projectChat', () => {
     cleanup: () => void
   }>()
 
+  /**
+   * 本次回答内已经选择“全部允许”的操作类型。
+   * 只在当前 send 生命周期内有效，新回答/停止后清空。
+   */
+  const autoApproveKinds = new Map<string, Set<ApprovalKind>>()
+
+  function allowKinds(projectId: string, kinds: ApprovalKind[]) {
+    let set = autoApproveKinds.get(projectId)
+    if (!set) {
+      set = new Set<ApprovalKind>()
+      autoApproveKinds.set(projectId, set)
+    }
+    for (const kind of kinds)
+      set.add(kind)
+  }
+
+  function isAutoApproved(projectId: string, kind: ApprovalKind) {
+    return autoApproveKinds.get(projectId)?.has(kind) ?? false
+  }
+
   function stateOf(projectId: string): ProjectChatState {
     let state = states.value[projectId]
     if (!state) {
@@ -267,6 +287,7 @@ export const useProjectChatStore = defineStore('projectChat', () => {
     const state = stateOf(projectId)
     if (state.pendingApproval)
       settleApproval(projectId, state.pendingApproval.id, false, '已停止生成')
+    autoApproveKinds.delete(projectId)
   }
 
   /**
@@ -316,6 +337,30 @@ export const useProjectChatStore = defineStore('projectChat', () => {
     settleApproval(projectId, id, false, message)
   }
 
+  /**
+   * 本次回答内全部允许：
+   * - 成员/项目写操作直接放行；
+   * - 如果当前卡片就是命令，连后续命令一起放行；
+   * - 只对当前回答有效，新回答/停止后恢复逐条确认。
+   */
+  function approveAll(projectId: string, id: string, kind: ApprovalKind) {
+    const entry = approvalResolvers.get(id)
+    if (!entry || entry.projectId !== projectId)
+      return
+    const kinds: ApprovalKind[] = kind === 'shell'
+      ? ['member', 'project', 'shell']
+      : ['member', 'project']
+    allowKinds(projectId, kinds)
+    settleApproval(
+      projectId,
+      id,
+      true,
+      kind === 'shell'
+        ? '本次回答内已允许所有命令和写操作'
+        : '本次回答内已全部允许',
+    )
+  }
+
   async function send(
     projectId: string,
     text: string,
@@ -338,6 +383,9 @@ export const useProjectChatStore = defineStore('projectChat', () => {
     const content = text.trim()
     if (!content || state.streaming)
       return
+
+    // 每次新回答都从“逐条确认”开始
+    autoApproveKinds.delete(projectId)
 
     const userMessage: ProjectChatMessage = {
       id: uid(),
@@ -425,6 +473,22 @@ export const useProjectChatStore = defineStore('projectChat', () => {
             return
           }
 
+          if (isAutoApproved(projectId, request.kind)) {
+            assistant.approvalDecisions = [
+              ...(assistant.approvalDecisions ?? []),
+              {
+                id: request.id,
+                kind: request.kind,
+                title: request.title,
+                decision: 'allowed',
+                message: '本次回答内自动允许',
+                decidedAt: new Date().toISOString(),
+              },
+            ]
+            resolve({ approved: true, message: '本次回答内自动允许' })
+            return
+          }
+
           const entry = {
             projectId,
             messageId: assistant.id,
@@ -484,6 +548,7 @@ export const useProjectChatStore = defineStore('projectChat', () => {
           settleApproval(projectId, id, false, '请求已结束')
       }
       state.pendingApproval = null
+      autoApproveKinds.delete(projectId)
       state.streaming = false
       aborters.delete(projectId)
       persist()
@@ -500,6 +565,7 @@ export const useProjectChatStore = defineStore('projectChat', () => {
     stop,
     approveTool,
     denyTool,
+    approveAll,
     send,
   }
 })

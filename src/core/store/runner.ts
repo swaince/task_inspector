@@ -9,6 +9,7 @@ import type { CommitQuery } from '../adapters/gitlab'
 import { createDailyReportSource } from '../adapters/dailyReport'
 import { createLlmClient } from '../llm/client'
 import { runInspection } from '../engine/inspector'
+import { collectBranchCommits } from '../engine/branchCommits'
 import { buildProjectCatalog, catalogFingerprint } from '../engine/projectCatalog'
 import { useSettingsStore } from './settings'
 import { useReportStore } from './reports'
@@ -187,11 +188,13 @@ export const useRunnerStore = defineStore('runner', () => {
         ].join('|')
         let pending = commitCache.get(key)
         if (!pending) {
-          pending = gitlab.listCommits(project, query).catch((err) => {
-            // 失败不要留在缓存里，下一个人/下一次还能重试
-            commitCache.delete(key)
-            throw err
-          })
+          pending = collectBranchCommits(gitlab, project, query, { maxBranches: 24 })
+            .then(result => result.commits)
+            .catch((err) => {
+              // 失败不要留在缓存里，下一个人/下一次还能重试
+              commitCache.delete(key)
+              throw err
+            })
           commitCache.set(key, pending)
         }
         return pending

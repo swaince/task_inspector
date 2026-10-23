@@ -2,8 +2,10 @@ import type { GitCommit, GitLabProjectRef, MemberProfile } from '../domain/types
 import type { RuleSettings } from '../config/settings'
 import type { GitLabClient } from '../adapters/gitlab'
 import type { MemberIdentity } from './matching'
+import type { BranchActivity } from './branchCommits'
 import { commitBelongsTo, resolveMemberIdentity } from './matching'
 import { commitWindow } from './window'
+import { collectBranchCommits } from './branchCommits'
 
 /**
  * 事实层：某段时间里，各个仓库实际发生了哪些提交。
@@ -14,11 +16,17 @@ import { commitWindow } from './window'
  * 而那时候用户不知道该信哪个。
  */
 
+export interface ProjectBranchActivity extends BranchActivity {
+  repoPath: string
+}
+
 export interface ProjectCommits {
   projectId: number
   projectPath: string
   projectName: string
   commits: GitCommit[]
+  /** 区间内有提交的分支，供统计和报告注明分支工作 */
+  branches?: ProjectBranchActivity[]
 }
 
 export interface ActivityFailure {
@@ -82,19 +90,34 @@ export async function collectProjectCommits(
       break
 
     try {
-      const commits = await opts.gitlab.listCommits(project, {
-        since,
-        until,
-        // 只算仓库的默认分支。不指定的话，GitLab 的默认行为是默认分支，
-        // 但这属于「恰好一致」——写出来才能在界面上说明白统计的是哪条线
-        refName: project.defaultBranch,
-        perPage: opts.perPage,
-        maxCommits: opts.maxCommitsPerProject,
-        fetchFileChanges: false,
-        signal: opts.signal,
-      })
-      if (commits.length)
-        batches.push({ projectId: project.id, projectPath: project.pathWithNamespace, projectName: project.name, commits })
+      // 不只默认分支：区间内有提交的功能分支同样参与统计
+      const result = await collectBranchCommits(
+        opts.gitlab,
+        project,
+        {
+          since,
+          until,
+          perPage: opts.perPage,
+          maxCommits: opts.maxCommitsPerProject,
+          fetchFileChanges: false,
+          signal: opts.signal,
+        },
+        { maxBranches: 24 },
+      )
+      for (const failure of result.failures)
+        failures.push({ projectPath: project.pathWithNamespace, message: failure })
+      if (result.commits.length) {
+        batches.push({
+          projectId: project.id,
+          projectPath: project.pathWithNamespace,
+          projectName: project.name,
+          commits: result.commits,
+          branches: result.branches.map(branch => ({
+            ...branch,
+            repoPath: project.pathWithNamespace,
+          })),
+        })
+      }
     }
     catch (err) {
       failures.push({

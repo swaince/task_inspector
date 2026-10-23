@@ -37,6 +37,7 @@ export const TOOL_DOCS: Record<string, DocId> = {
   'members.ensureMany': 'members',
   'members.bindProjectAuthors': 'members',
   'projects.list': 'projects',
+  'projects.branches': 'projects',
   'projects.ensure': 'projects',
   'shell.run': 'assistant-tools',
 }

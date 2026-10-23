@@ -167,6 +167,28 @@ function describeRepo(repo: RepoProfile) {
   const pieces: string[] = []
   pieces.push(`### 仓库 ${repo.repoPath}`)
   pieces.push(`扫描文件 ${repo.files} 个${repo.truncated ? '（超出上限，仅扫描了部分）' : ''}${repo.error ? `；扫描错误：${repo.error}` : ''}`)
+  const branchParts: string[] = []
+  if (repo.defaultBranch)
+    branchParts.push(`默认 ${repo.defaultBranch}`)
+  if (repo.latestBranch)
+    branchParts.push(`最近提交 ${repo.latestBranch}`)
+  if (repo.currentBranch)
+    branchParts.push(`本地当前 ${repo.currentBranch}`)
+  if (repo.analyzedBranch)
+    branchParts.push(`画像基于 ${repo.analyzedBranch}`)
+  if (repo.branches?.length)
+    branchParts.push(`共 ${repo.branches.length} 个分支引用`)
+  if (branchParts.length)
+    pieces.push(`分支：${branchParts.join(' · ')}`)
+  if (repo.branchWork?.length) {
+    const list = repo.branchWork.slice(0, 12).map(b =>
+      `- ${b.name}${b.default ? '（默认）' : ''}：${b.commits} 条提交，最近 ${b.latestCommitAt ?? '未知'}；`
+      + `近期：${b.titles.slice(0, 3).join('；') || '（无标题）'}`,
+    )
+    pieces.push(`近 ${repo.branchWorkDays ?? 90} 天各分支在做什么：\n${list.join('\n')}`)
+  }
+  if (repo.branchWorkError)
+    pieces.push(`分支提交可能不全：${repo.branchWorkError}`)
   if (repo.narrative)
     pieces.push(repo.narrative)
 
@@ -226,10 +248,13 @@ function describeCommits(commits: GitCommit[]) {
   return commits.map((commit) => {
     const stats = commit.stats ? `，+${commit.stats.additions}/-${commit.stats.deletions}` : ''
     const date = formatDateTime(commit.committedDate)
+    const branches = commit.branches?.length
+      ? ` [分支 ${commit.branches.join('、')}]`
+      : commit.refName ? ` [分支 ${commit.refName}]` : ''
     // 提交正文常写「为什么改」，比标题更有信息量；标题已经有了，只补正文
     const body = commit.message.split(/\r?\n/).slice(1).join(' ').trim()
     const detail = body ? ` —— ${clip(body, 140)}` : ''
-    return `- ${date} ${commit.authorName}：${commit.title}${detail}（${commit.projectPath}${stats}）`
+    return `- ${date} ${commit.authorName}${branches}：${commit.title}${detail}（${commit.projectPath}${stats}）`
   }).join('\n')
 }
 

@@ -133,6 +133,12 @@ function denyTool() {
     chat.denyTool(CONVERSATION_ID, pending.id)
 }
 
+function approveAllTools() {
+  const pending = pendingApproval.value
+  if (pending)
+    chat.approveAll(CONVERSATION_ID, pending.id, pending.kind)
+}
+
 function traceMeta(trace: ToolTrace) {
   const meta = trace.meta
   if (!meta)
@@ -202,6 +208,7 @@ function traceMeta(trace: ToolTrace) {
                 :approval="pendingApproval"
                 class="mb-2"
                 @approve="approveTool"
+                @approve-all="approveAllTools"
                 @deny="denyTool"
               />
 

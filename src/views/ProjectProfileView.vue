@@ -235,10 +235,7 @@ async function generate() {
       localPaths: localPaths.value,
       skills: texts,
       llm: settingsStore.settings.llm,
-      gitlab: {
-        baseUrl: settingsStore.settings.gitlab.baseUrl,
-        token: settingsStore.settings.gitlab.token,
-      },
+      gitlab: settingsStore.settings.gitlab,
       autoClone: settingsStore.settings.analysis.autoClone,
       cloneDepth: settingsStore.settings.analysis.cloneDepth,
       onProgress: (message) => { profileStore.setProgress(id, message) },
@@ -487,6 +484,37 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
                 <Badge v-if="repo.modules.length" variant="outline" class="text-[10px]">
                   {{ repo.modules.length }} 个模块
                 </Badge>
+                <Badge v-if="repo.defaultBranch" variant="outline" class="text-[10px]">
+                  默认 {{ repo.defaultBranch }}
+                </Badge>
+                <Badge
+                  v-if="repo.latestBranch"
+                  variant="secondary"
+                  class="text-[10px] tabular-nums"
+                  :title="repo.latestCommitAt ? `最近提交 ${formatDateTime(repo.latestCommitAt)}` : '最近提交的分支'"
+                >
+                  最新 {{ repo.latestBranch }}<template v-if="repo.latestCommitAt"> · {{ formatDateTime(repo.latestCommitAt) }}</template>
+                </Badge>
+                <Badge
+                  v-if="repo.analyzedBranch"
+                  variant="outline"
+                  class="text-[10px]"
+                  :class="repo.defaultBranch && repo.analyzedBranch !== repo.defaultBranch
+                    ? 'border-amber-500/40 text-amber-600 dark:text-amber-500'
+                    : ''"
+                >
+                  分析 {{ repo.analyzedBranch }}
+                </Badge>
+                <Badge
+                  v-if="repo.currentBranch && repo.currentBranch !== repo.analyzedBranch"
+                  variant="outline"
+                  class="text-[10px] text-muted-foreground"
+                >
+                  本地在 {{ repo.currentBranch }}
+                </Badge>
+                <Badge v-if="repo.branches?.length" variant="ghost" class="text-[10px]">
+                  {{ repo.branches.length }} 个分支引用
+                </Badge>
                 <Badge v-if="repo.truncated" variant="outline" class="text-[10px] text-amber-600 dark:text-amber-500">
                   文件过多，已截断
                 </Badge>
@@ -506,6 +534,47 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
 
               <p v-else-if="!repo.error && !repo.modules.length" class="text-xs text-muted-foreground">
                 这个仓库里没有可分析的源码文件（目录为空，或只包含被忽略的依赖/构建产物）。
+              </p>
+
+              <div v-if="repo.branchWork?.length" class="space-y-1.5">
+                <div class="flex flex-wrap items-baseline gap-2">
+                  <span class="text-[11px] font-medium">分支工作</span>
+                  <span class="text-[10px] text-muted-foreground">
+                    近 {{ repo.branchWorkDays ?? 90 }} 天，{{ repo.branchWork.length }} 个分支有提交
+                  </span>
+                </div>
+                <div
+                  v-for="branch in repo.branchWork"
+                  :key="branch.name"
+                  class="rounded-md border px-2.5 py-2"
+                >
+                  <div class="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" class="font-mono text-[10px]">
+                      {{ branch.name }}
+                    </Badge>
+                    <Badge v-if="branch.default" variant="secondary" class="text-[10px]">默认</Badge>
+                    <Badge v-if="branch.merged" variant="ghost" class="text-[10px]">已合并</Badge>
+                    <span class="text-[11px] tabular-nums text-muted-foreground">
+                      {{ branch.commits }} 条提交
+                    </span>
+                    <span v-if="branch.latestCommitAt" class="ml-auto text-[10px] tabular-nums text-muted-foreground">
+                      最近 {{ formatDateTime(branch.latestCommitAt) }}
+                    </span>
+                  </div>
+                  <ul v-if="branch.titles.length" class="mt-1 space-y-0.5">
+                    <li
+                      v-for="(title, i) in branch.titles.slice(0, 3)"
+                      :key="i"
+                      class="truncate text-[11px] text-muted-foreground"
+                      :title="title"
+                    >
+                      {{ title }}
+                    </li>
+                  </ul>
+                </div>
+              </div>
+              <p v-if="repo.branchWorkError" class="text-[11px] text-amber-600 dark:text-amber-500">
+                部分分支的提交没有拉全：{{ repo.branchWorkError }}
               </p>
 
               <div v-if="repo.findings?.length" class="space-y-1.5">

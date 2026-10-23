@@ -1,4 +1,4 @@
-import type { ActivityFailure } from '../engine/activity'
+import type { ActivityFailure, ProjectBranchActivity } from '../engine/activity'
 import type { ShareEstimate } from '../engine/estimate'
 import type { GitCommit } from '../domain/types'
 import { defineStore } from 'pinia'
@@ -26,6 +26,8 @@ export interface MemberActivitySnapshot {
   from: string
   to: string
   rows: MemberActivityRow[]
+  /** 区间内有提交的分支活动 */
+  branches: ProjectBranchActivity[]
   failures: ActivityFailure[]
   estimate: ShareEstimate | null
   analyzedAt: string

@@ -2,7 +2,10 @@ import type { Project, ProjectLink } from '@/core/domain/types'
 import type { BuiltinTool, BuiltinToolContext, ToolPreparation } from '../types'
 import { AdapterError, GitLabClient } from '@/core/adapters/gitlab'
 import { resolveProjectLinks } from '@/core/adapters/projectLinks'
+import { transport } from '@/core/bridge'
+import { useProfileStore } from '@/core/store/profile'
 import { createProjectDraft, useProjectStore } from '@/core/store/projects'
+import { formatDateTime } from '@/lib/format'
 
 /**
  * 项目与 GitLab 关联的查询/维护。
@@ -212,6 +215,33 @@ function formatProject(project: Project) {
   return `- ${parts.join('；')}`
 }
 
+async function findProjectForTool(ctx: BuiltinToolContext, hint: unknown) {
+  const store = useProjectStore()
+  if (!store.loaded)
+    await store.load()
+
+  const keyword = optionalText(hint) ?? (ctx.projectId !== '__app__' ? ctx.projectId : undefined)
+  if (!keyword)
+    throw new Error('需要指定项目：在项目对话里提问，或给出项目名称/编码')
+
+  const found = store.items.find(project =>
+    project.id === keyword
+    || normalize(project.code) === normalize(keyword)
+    || normalize(project.name) === normalize(keyword)
+    || project.aliases.some(alias => normalize(alias) === normalize(keyword)),
+  )
+  if (found)
+    return found
+
+  const fuzzy = store.items.filter(project =>
+    normalize(project.name).includes(normalize(keyword))
+    || project.aliases.some(alias => normalize(alias).includes(normalize(keyword))),
+  )
+  if (fuzzy.length === 1)
+    return fuzzy[0]
+  throw new Error(`找不到项目「${keyword}」；请给出更完整的项目名称或编码`)
+}
+
 export function createProjectsTool(): BuiltinTool[] {
   const listTool: BuiltinTool = {
     descriptor: {
@@ -264,6 +294,148 @@ export function createProjectsTool(): BuiltinTool[] {
       if (!list.length)
         return '没有找到匹配的项目。'
       return `项目（${list.length} 条）：\n${list.map(formatProject).join('\n')}`
+    },
+  }
+
+  const branchesTool: BuiltinTool = {
+    descriptor: {
+      id: 'projects.branches',
+      source: 'builtin',
+      serverId: 'builtin-projects',
+      serverName: 'builtin_projects',
+      name: 'branches',
+      qualifiedName: 'builtin_projects__branches',
+      description: '查看项目每个仓库的最近提交分支、默认分支、本地当前分支、画像分析分支、分支引用，以及近段时间各分支在做什么（提交数、最近时间和近期标题）。回答代码结构、提交、画像或「在哪个分支」「哪个分支做了什么」相关问题前先用它确认分支；画像优先分析最近提交的分支，但分支工作必须全量看待。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          project: { type: 'string', description: '项目名称、编码或 id；在项目对话里可以省略' },
+        },
+      },
+      readOnly: true,
+    },
+
+    async run(args, ctx) {
+      const project = await findProjectForTool(ctx, args.project)
+      const profileStore = useProfileStore()
+      await profileStore.load(project.id)
+      const profile = profileStore.byProject[project.id] ?? null
+
+      const rows: Array<{
+        repo: string
+        localPath: string
+        defaultBranch: string
+        latest: string
+        latestAt: string
+        current: string
+        analyzed: string
+        refs: string[]
+        note: string
+      }> = []
+
+      const matchedProfileRepos = new Set<number>()
+      for (const repo of project.repos ?? []) {
+        const profileRepo = profile?.repos.find(item =>
+          item.repoId === repo.id || item.repoPath === repo.pathWithNamespace,
+        )
+        if (profileRepo)
+          matchedProfileRepos.add(profileRepo.repoId)
+        const localPath = profileRepo?.localPath ?? ''
+        let live = null
+        if (localPath) {
+          try {
+            live = await transport().gitBranches(localPath)
+          }
+          catch {
+            // 没有 git 时只能展示画像/关联里的默认分支
+          }
+        }
+        const defaultBranch = profileRepo?.defaultBranch || live?.defaultBranch || repo.defaultBranch || '—'
+        const latest = profileRepo?.latestBranch || live?.latestBranch || '—'
+        const latestAt = profileRepo?.latestCommitAt
+          || live?.branches.find(branch => branch.latest)?.committedAt
+          || '—'
+        const current = profileRepo?.currentBranch || live?.current || '—'
+        const analyzed = profileRepo?.analyzedBranch || current
+        const refs = [...new Set(profileRepo?.branches ?? live?.branches.map(item => item.name) ?? [])]
+        const note = !localPath
+          ? '本地未定位'
+          : latest !== '—' && analyzed !== latest
+            ? `画像分析的是 ${analyzed}，不是最近提交分支 ${latest}`
+            : current !== '—' && current !== analyzed
+              ? `本地工作区在 ${current}，画像按 ${analyzed} 分析`
+              : '分支一致'
+        rows.push({
+          repo: repo.pathWithNamespace,
+          localPath,
+          defaultBranch,
+          latest,
+          latestAt,
+          current,
+          analyzed,
+          refs,
+          note,
+        })
+      }
+
+      for (const profileRepo of profile?.repos ?? []) {
+        if (matchedProfileRepos.has(profileRepo.repoId) || !profileRepo.localPath)
+          continue
+        let live = null
+        try {
+          live = await transport().gitBranches(profileRepo.localPath)
+        }
+        catch {}
+        rows.push({
+          repo: profileRepo.repoPath,
+          localPath: profileRepo.localPath,
+          defaultBranch: profileRepo.defaultBranch || live?.defaultBranch || '—',
+          latest: profileRepo.latestBranch || live?.latestBranch || '—',
+          latestAt: profileRepo.latestCommitAt
+            || live?.branches.find(branch => branch.latest)?.committedAt
+            || '—',
+          current: profileRepo.currentBranch || live?.current || '—',
+          analyzed: profileRepo.analyzedBranch || profileRepo.currentBranch || live?.current || '—',
+          refs: [...new Set(profileRepo.branches ?? live?.branches.map(item => item.name) ?? [])],
+          note: '本地目录',
+        })
+      }
+
+      if (!rows.length)
+        return `项目「${project.name}」还没有关联仓库或本地代码目录。`
+
+      const lines = [
+        `项目：${project.name}${project.code ? `（${project.code}）` : ''}`,
+        '',
+        '| 仓库 | 最近提交分支 | 最近提交时间 | 默认分支 | 本地当前 | 画像分析 | 分支引用 | 说明 |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- |',
+      ]
+      for (const row of rows) {
+        const refs = row.refs.length
+          ? `${row.refs.length} 个（${row.refs.slice(0, 6).join('、')}${row.refs.length > 6 ? '…' : ''}）`
+          : '—'
+        const latestAt = row.latestAt === '—' ? '—' : formatDateTime(row.latestAt)
+        lines.push(`| ${row.repo} | ${row.latest} | ${latestAt} | ${row.defaultBranch} | ${row.current} | ${row.analyzed} | ${refs} | ${row.note} |`)
+      }
+
+      /*
+       * 分支工作单独列：只给「最近提交分支」会让人以为别的分支没干活。
+       * 数据来自画像里的多分支统计，窗口是生成画像时的近 N 天。
+       */
+      const workSections: string[] = []
+      for (const profileRepo of profile?.repos ?? []) {
+        if (!profileRepo.branchWork?.length)
+          continue
+        const items = profileRepo.branchWork.slice(0, 12).map(branch =>
+          `- ${branch.name}${branch.default ? '（默认）' : ''}${branch.merged ? '（已合并）' : ''}：`
+          + `${branch.commits} 条提交，最近 ${branch.latestCommitAt ? formatDateTime(branch.latestCommitAt) : '未知'}；`
+          + `近期：${branch.titles.slice(0, 3).join('；') || '（无标题）'}`,
+        )
+        workSections.push(`### ${profileRepo.repoPath}（近 ${profileRepo.branchWorkDays ?? 90} 天）\n${items.join('\n')}`)
+      }
+      if (workSections.length)
+        lines.push('', '各分支在做什么：', ...workSections)
+      return lines.join('\n')
     },
   }
 
@@ -491,5 +663,5 @@ export function createProjectsTool(): BuiltinTool[] {
     },
   }
 
-  return [listTool, ensureTool]
+  return [listTool, branchesTool, ensureTool]
 }

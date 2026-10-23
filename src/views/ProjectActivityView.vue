@@ -154,6 +154,9 @@ const totals = computed(() => ({
   missingCommits: rows.value.filter(r => r.missingCommits).length,
 }))
 
+/** 区间内有提交的分支：避免只看到默认分支，误判别的分支没干活 */
+const branchActivity = computed(() => activityStore.snapshot?.branches ?? [])
+
 /* ------------------------------------------------------------------ *
  * 两个维度的汇总
  * ------------------------------------------------------------------ */
@@ -347,10 +350,19 @@ function buildReportPrompt(): string {
     + `+${p.additions}/-${p.deletions}，申报 ${p.hours}h，有提交未申报 ${p.missingDays} 天`,
   )
   const recent = rows.value
-    .flatMap(r => r.commits.map(c => `${formatDateCN(r.date)} ${c.authorName}：${c.title}`))
+    .flatMap(r => r.commits.map(c => {
+      const branches = c.branches?.length ? ` [分支 ${c.branches.join('、')}]` : ''
+      return `${formatDateCN(r.date)} ${c.authorName}${branches}：${c.title}`
+    }))
     .sort()
     .reverse()
     .slice(0, 25)
+
+  const branchLines = (activityStore.snapshot?.branches ?? [])
+    .slice(0, 40)
+    .map(branch => `${branch.repoPath} / ${branch.name}${branch.default ? '（默认）' : ''}：`
+      + `${branch.commits} 条，最近 ${branch.latestCommitAt ? formatDateTime(branch.latestCommitAt) : '未知'}；`
+      + `近期：${branch.titles.slice(0, 3).join('；') || '（无标题）'}`)
 
   /* 图表要按完整日序列画，包括没有记录的天，否则趋势会断 */
   const chartDays = reportDays.value.map(d =>
@@ -377,9 +389,12 @@ function buildReportPrompt(): string {
     + `只统计代码产出（提交、活跃时段、改动量），不含会议、评审、答疑；数值是区间，不是精确工时。\n\n`
     + `按天：\n${dayLines.join('\n') || '（无）'}\n\n`
     + `按人：\n${personLines.join('\n') || '（无）'}\n\n`
+    + `分支活动：\n${branchLines.join('\n') || '（无分支信息）'}\n\n`
     + `日报申报内容：\n${declared.join('\n') || '（无）'}\n\n`
     + `最近的提交标题：\n${recent.join('\n') || '（无）'}\n\n`
     + `每日序列（含无记录的天）：\n${chartDays.join('\n') || '（无）'}\n\n`
+    + `统计范围覆盖区间内有提交的所有分支，不是只看默认分支。写结论时必须区分「哪个分支做了什么」，`
+    + `不能把多分支的工作混成一句「有提交」。\n`
     + `判断「有申报无提交」的日子时，以「日报申报内容」为准：里面写了需求文档、架构设计、评审、`
     + `会议、答疑这类工作，就属于非编码工作，不要笼统写成「未提供工作内容」。\n`
     + `周末和法定节假日没有提交、没有日报是正常的，不要写成漏报或缺勤；活跃天数、未申报记录都只按工作日判断。\n\n`
@@ -398,6 +413,9 @@ function buildReportPrompt(): string {
     + `表格之后，再输出一个 donut 图表展示各人的提交占比：\n`
     + '```chart\n{"type":"donut","title":"人员提交占比","unit":"条","labels":["张三","李四"],"series":[{"name":"提交","data":[85,9]}]}\n```\n'
     + `数据用表格里的提交条数，labels 与表格里的人一一对应。\n\n`
+    + `## 分支工作\n`
+    + `一张表格：| 仓库 | 分支 | 提交 | 最近提交 | 在做什么 |。「在做什么」用「分支活动」里的近期提交标题概括，一条分支一行；`
+    + `没有分支信息时只输出「数据不足」，不要臆测。\n\n`
     + `## 与日报的对照\n`
     + `一张表格：| 日期 | 人员 | 问题 | 依据 |，只列异常（有提交未申报 / 已申报无提交 / 无记录）。\n\n`
     + `## 建议\n不超过 3 条列表，每条一句话。`
@@ -512,6 +530,7 @@ async function load() {
       from: from.value,
       to: to.value,
       rows: rows.value,
+      branches: batches.flatMap(batch => batch.branches ?? []),
       failures: failures.value,
       scannedAt: scannedAt.value,
       liveFailed: liveFailed.value,
@@ -721,6 +740,29 @@ function fmtTime(iso: string) {
         </Card>
       </div>
 
+      <Card v-if="branchActivity.length" class="py-3">
+        <CardContent class="px-4">
+          <div class="mb-2 flex items-center gap-2">
+            <span class="text-xs font-medium">区间内活跃分支</span>
+            <span class="text-[11px] text-muted-foreground">
+              共 {{ branchActivity.length }} 个分支有提交，统计不只看默认分支
+            </span>
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            <Badge
+              v-for="b in branchActivity"
+              :key="`${b.repoPath}|${b.name}`"
+              variant="secondary"
+              class="text-[11px] font-normal"
+              :title="`${b.repoPath} / ${b.name}${b.latestCommitAt ? `，最近提交 ${formatDateTime(b.latestCommitAt)}` : ''}`"
+            >
+              {{ b.repoPath.split('/').pop() }} · {{ b.name }}
+              <span class="ml-1 text-muted-foreground tabular-nums">{{ b.commits }} 条</span>
+            </Badge>
+          </div>
+        </CardContent>
+      </Card>
+
       <template v-if="rows.length">
         <div class="flex flex-wrap items-center gap-1.5">
           <Button
@@ -791,6 +833,9 @@ function fmtTime(iso: string) {
                     >
                       <span class="text-muted-foreground">{{ fmtTime(c.authoredDate) }}</span>
                       {{ c.title }}
+                      <span v-if="c.branches?.length" class="ml-1 text-[10px] text-muted-foreground">
+                        {{ c.branches.slice(0, 2).join(' / ') }}
+                      </span>
                     </button>
                     <div v-if="row.commits.length > 2" class="text-muted-foreground">
                       另 {{ row.commits.length - 2 }} 条

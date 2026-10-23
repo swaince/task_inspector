@@ -65,6 +65,13 @@ const grouped = computed(() => {
         >
           <span class="shrink-0 font-mono text-[11px] text-muted-foreground">{{ commit.shortId }}</span>
           <span class="min-w-0 flex-1 truncate text-xs">{{ commit.title }}</span>
+          <span
+            v-if="commit.branches?.length"
+            class="shrink-0 font-mono text-[10px] text-muted-foreground"
+            :title="`该提交所在分支：${commit.branches.join('、')}`"
+          >
+            {{ commit.branches.slice(0, 2).join(' / ') }}
+          </span>
           <span class="shrink-0 text-[11px] tabular-nums text-muted-foreground">
             {{ formatDateTime(commit.authoredDate) }}
           </span>

@@ -2,6 +2,7 @@ import type { MemberProfile, Project } from '@/core/domain/types'
 import type { BuiltinTool, BuiltinToolContext, ToolPreparation } from '../types'
 import { createMemberDraft, useMemberStore } from '@/core/store/members'
 import { useProjectStore } from '@/core/store/projects'
+import { collectBranchCommits } from '@/core/engine/branchCommits'
 
 /**
  * 人员查询与维护。
@@ -122,6 +123,7 @@ interface AuthorRow {
   hasEmail: boolean
   names: Set<string>
   repos: Set<string>
+  branches: Set<string>
   commits: number
   member?: MemberProfile
   conflict?: string
@@ -184,7 +186,8 @@ async function scanAuthorsForProject(
 
   for (const repo of repos) {
     try {
-      const list = await ctx.gitlab.listCommits(
+      const result = await collectBranchCommits(
+        ctx.gitlab,
         {
           id: repo.id,
           pathWithNamespace: repo.pathWithNamespace,
@@ -198,12 +201,14 @@ async function scanAuthorsForProject(
           perPage: 100,
           maxCommits: 300,
           fetchFileChanges: false,
-          refName: repo.defaultBranch,
           signal: ctx.signal,
         },
+        { maxBranches: 20 },
       )
-      commits += list.length
-      for (const commit of list) {
+      for (const failure of result.failures)
+        failures.push(`${repo.pathWithNamespace} / ${failure}`)
+      commits += result.commits.length
+      for (const commit of result.commits) {
         const email = commit.authorEmail.trim()
         const name = commit.authorName.trim()
         const key = normalize(email) || `name:${normalize(name)}`
@@ -211,7 +216,7 @@ async function scanAuthorsForProject(
           continue
         let row = authors.get(key)
         if (!row) {
-          row = { email: email || '—', hasEmail: Boolean(email), names: new Set(), repos: new Set(), commits: 0 }
+          row = { email: email || '—', hasEmail: Boolean(email), names: new Set(), repos: new Set(), branches: new Set(), commits: 0 }
           authors.set(key, row)
         }
         if (email)
@@ -219,6 +224,8 @@ async function scanAuthorsForProject(
         if (name)
           row.names.add(name)
         row.repos.add(repo.pathWithNamespace)
+        for (const branch of commit.branches ?? (commit.refName ? [commit.refName] : []))
+          row.branches.add(branch)
         row.commits += 1
       }
     }
@@ -328,8 +335,8 @@ export function createMembersTool(): BuiltinTool[] {
         `项目：${scan.project.name}${scan.project.code ? `（${scan.project.code}）` : ''}`,
         `范围：最近 ${scan.days} 天 · ${scan.repos} 个仓库 · ${scan.commits} 条提交 · 只统计默认分支`,
         '',
-        '| 邮箱 | 提交者 | 提交数 | 仓库数 | 现有成员 | 状态 |',
-        '| --- | --- | --- | --- | --- | --- |',
+        '| 邮箱 | 提交者 | 提交数 | 仓库数 | 分支 | 现有成员 | 状态 |',
+        '| --- | --- | --- | --- | --- | --- | --- |',
       ]
       for (const row of list) {
         const status = !row.hasEmail
@@ -341,7 +348,7 @@ export function createMembersTool(): BuiltinTool[] {
                 ? '已绑定'
                 : `建议绑定 → ${row.member.name}`
               : '未匹配到成员'
-        lines.push(`| ${row.email} | ${[...row.names].join(' / ') || '—'} | ${row.commits} | ${row.repos.size} | ${row.member?.name ?? '—'} | ${status} |`)
+        lines.push(`| ${row.email} | ${[...row.names].join(' / ') || '—'} | ${row.commits} | ${row.repos.size} | ${[...row.branches].slice(0, 5).join('、') || '—'} | ${row.member?.name ?? '—'} | ${status} |`)
       }
       if (scan.rows.length > list.length)
         lines.push('', `还有 ${scan.rows.length - list.length} 个提交身份未列出，请缩小时间范围。`)

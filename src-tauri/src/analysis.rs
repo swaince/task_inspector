@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -602,6 +603,34 @@ pub struct Hotspot {
     pub changes: u64,
 }
 
+/// 一个本地/远程分支引用。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoBranch {
+    pub name: String,
+    pub sha: String,
+    /// 是否来自 refs/remotes（origin/...）
+    pub remote: bool,
+    pub current: bool,
+    pub default: bool,
+    /// 所有分支里最近提交的那个
+    pub latest: bool,
+    /// 最近一次提交时间（ISO）
+    pub committed_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoBranches {
+    pub current: Option<String>,
+    pub default_branch: Option<String>,
+    /// 最近提交的分支名（不含 origin/ 前缀）
+    pub latest_branch: Option<String>,
+    /// 创建 worktree 时使用的完整引用，例如 origin/feature/x
+    pub latest_ref: Option<String>,
+    pub branches: Vec<RepoBranch>,
+}
+
 /// 这些目录里要么是依赖、要么是构建产物，对「项目做了什么」没有信息量。
 const SKIP_DIRS: [&str; 14] = [
     ".git", "node_modules", "target", "dist", "build", "out", ".idea", ".vscode",
@@ -901,9 +930,10 @@ fn redact_url(text: &str) -> String {
 
 /// 浅克隆一个仓库到指定目录。
 ///
-/// 用 `--depth` + `--single-branch`：画像只需要结构和近期改动，
-/// 完整历史会让 itms-vue 这种 260MB 的仓库克隆到十几分钟。
-/// 默认分支由调用方给（就是统计提交用的那条），保证「分析的分支」和「检查的分支」一致。
+/// 用 `--depth` 控制历史规模，但**必须保留所有远程分支引用**：
+/// 之前用 `--single-branch` 只拉了默认分支，画像只能看默认分支，
+/// 用户在其他分支上排查问题时拿不到完整的 refs。
+/// 默认分支由调用方给（就是统计提交用的那条），克隆后仍检出默认分支。
 #[tauri::command]
 pub async fn git_clone(
     url: String,
@@ -914,6 +944,8 @@ pub async fn git_clone(
     tauri::async_runtime::spawn_blocking(move || -> Result<CloneResult, String> {
         let dest = PathBuf::from(dest.trim());
         if dest.join(".git").exists() {
+            // 已有 checkout 不覆盖工作区，但把 origin 的所有分支/标签补全
+            fetch_all_refs(&dest)?;
             return Ok(CloneResult {
                 path: dest.to_string_lossy().into_owned(),
                 skipped: true,
@@ -937,7 +969,9 @@ pub async fn git_clone(
         if depth > 0 {
             cmd.args(["--depth", &depth.to_string()]);
         }
-        cmd.arg("--single-branch");
+        // --depth 默认隐含 --single-branch；显式关掉，保证 refs/remotes/origin/* 完整
+        cmd.arg("--no-single-branch");
+        cmd.arg("--tags");
         let branch = branch.unwrap_or_default();
         if !branch.trim().is_empty() {
             cmd.args(["--branch", branch.trim()]);
@@ -963,6 +997,48 @@ pub async fn git_clone(
     .map_err(|e| format!("克隆任务失败：{e}"))?
 }
 
+/// 把已有 checkout 的 origin 分支/标签引用补全。
+///
+/// 不改工作区、不 checkout；只更新 refs，供分支分析和临时 worktree 使用。
+fn fetch_all_refs(root: &Path) -> Result<(), String> {
+    let has_origin = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(root)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_origin {
+        return Ok(());
+    }
+
+    let _ = Command::new("git")
+        .args([
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ])
+        .current_dir(root)
+        .output();
+
+    let output = Command::new("git")
+        .args([
+            "fetch",
+            "--tags",
+            "--prune",
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ])
+        .current_dir(root)
+        .output()
+        .map_err(|e| format!("执行 git fetch 失败：{e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("更新远程引用失败：{}", redact_url(stderr.trim())));
+    }
+    Ok(())
+}
+
 /// 当前 HEAD 提交。画像用它判断「代码有没有变、要不要重算」。
 #[tauri::command]
 pub async fn git_head(path: String) -> Result<String, String> {
@@ -983,6 +1059,209 @@ pub async fn git_head(path: String) -> Result<String, String> {
     })
     .await
     .map_err(|e| format!("读取 HEAD 失败：{e}"))?
+}
+
+/// 本地/远程分支引用。画像用它确认「分析的是不是默认分支」。
+#[tauri::command]
+pub async fn git_branches(path: String) -> Result<RepoBranches, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<RepoBranches, String> {
+        let root = PathBuf::from(path.trim());
+        if !root.join(".git").exists() {
+            return Ok(RepoBranches {
+                current: None,
+                default_branch: None,
+                latest_branch: None,
+                latest_ref: None,
+                branches: Vec::new(),
+            });
+        }
+
+        let current = Command::new("git")
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .current_dir(&root)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let default_branch = Command::new("git")
+            .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+            .current_dir(&root)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.strip_prefix("origin/").unwrap_or(&s).to_string());
+
+        let output = Command::new("git")
+            .args([
+                "for-each-ref",
+                "--format=%(refname:short)\t%(objectname)\t%(refname)\t%(committerdate:unix)\t%(committerdate:iso-strict)",
+                "refs/heads",
+                "refs/remotes",
+            ])
+            .current_dir(&root)
+            .output()
+            .map_err(|e| format!("执行 git for-each-ref 失败：{e}"))?;
+        if !output.status.success() {
+            return Err("读取分支引用失败".to_string());
+        }
+
+        let mut branches: Vec<RepoBranch> = Vec::new();
+        let mut latest_remote: Option<(i64, String, String)> = None;
+        let mut latest_local: Option<(i64, String, String)> = None;
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut parts = line.split('\t');
+            let Some(short) = parts.next() else { continue };
+            let Some(sha) = parts.next() else { continue };
+            let Some(full) = parts.next() else { continue };
+            let unix = parts
+                .next()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(0);
+            let committed_at = parts.next().unwrap_or_default().to_string();
+            if full.ends_with("/HEAD") || short.ends_with("/HEAD") {
+                continue;
+            }
+            let remote = full.starts_with("refs/remotes/");
+            let name = if remote {
+                short.strip_prefix("origin/").unwrap_or(short).to_string()
+            } else {
+                short.to_string()
+            };
+
+            if unix > 0 {
+                let slot = if remote { &mut latest_remote } else { &mut latest_local };
+                if slot.as_ref().map(|(time, _, _)| unix > *time).unwrap_or(true) {
+                    *slot = Some((unix, name.clone(), short.to_string()));
+                }
+            }
+
+            branches.push(RepoBranch {
+                current: !remote && current.as_deref() == Some(name.as_str()),
+                default: default_branch.as_deref() == Some(name.as_str()),
+                latest: false,
+                name,
+                sha: sha.to_string(),
+                remote,
+                committed_at,
+            });
+        }
+
+        let latest = latest_remote.or(latest_local);
+
+        if let Some((_, ref latest_name, _)) = latest {
+            for branch in &mut branches {
+                if branch.name == *latest_name {
+                    branch.latest = true;
+                }
+            }
+        }
+
+        branches.sort_by(|a, b| {
+            b.latest
+                .cmp(&a.latest)
+                .then_with(|| b.default.cmp(&a.default))
+                .then_with(|| b.current.cmp(&a.current))
+                .then_with(|| a.remote.cmp(&b.remote))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        Ok(RepoBranches {
+            current,
+            default_branch,
+            latest_branch: latest.as_ref().map(|(_, name, _)| name.clone()),
+            latest_ref: latest.as_ref().map(|(_, _, reference)| reference.clone()),
+            branches,
+        })
+    })
+    .await
+    .map_err(|e| format!("读取分支失败：{e}"))?
+}
+
+/// 为一个引用创建临时 git worktree，用于在不改动用户 checkout 的前提下分析默认分支。
+#[tauri::command]
+pub async fn git_worktree_add(path: String, reference: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let root = PathBuf::from(path.trim());
+        if !root.join(".git").exists() {
+            return Err("不是 git 仓库".to_string());
+        }
+        let reference = reference.trim();
+        if reference.is_empty() || reference.starts_with('-') {
+            return Err("非法的分支引用".to_string());
+        }
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dest = std::env::temp_dir().join(format!(
+            "task-inspector-worktree-{}-{stamp}",
+            std::process::id()
+        ));
+        if let Some(parent) = dest.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        let output = Command::new("git")
+            .args(["worktree", "add", "--detach", "--force"])
+            .arg(&dest)
+            .arg(reference)
+            .current_dir(&root)
+            .output()
+            .map_err(|e| format!("创建临时工作树失败：{e}"))?;
+
+        if !output.status.success() {
+            let _ = fs::remove_dir_all(&dest);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "创建默认分支工作树失败：{}",
+                redact_url(stderr.trim())
+            ));
+        }
+
+        Ok(dest.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| format!("创建临时工作树失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn git_worktree_remove(path: String, worktree: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let root = PathBuf::from(path.trim());
+        let worktree = PathBuf::from(worktree.trim());
+        if !root.join(".git").exists() {
+            return Ok(());
+        }
+        // 只清理本命令自己创建的临时工作树，拒绝任意路径
+        let temp = std::env::temp_dir();
+        let name = worktree
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !worktree.starts_with(&temp) || !name.starts_with("task-inspector-worktree-") {
+            return Err("拒绝清理非应用创建的目录".to_string());
+        }
+        let _ = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&worktree)
+            .current_dir(&root)
+            .output();
+        if worktree.exists() {
+            let _ = fs::remove_dir_all(&worktree);
+        }
+        let _ = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&root)
+            .output();
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("清理临时工作树失败：{e}"))?
 }
 
 /// 读取一个文本文件（给 skill 用）。
@@ -1239,6 +1518,56 @@ mod tests {
 
         let job = scan.files.iter().find(|f| f.path.ends_with("Job.java")).unwrap();
         assert!(job.flags.iter().any(|f| f == "scheduled-job"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn branches_and_worktree_round_trip() {
+        let dir = temp_dir("branches");
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {:?}: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "test"]);
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        git(&["branch", "dev"]);
+
+        let path = dir.to_string_lossy().into_owned();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let branches = runtime
+            .block_on(git_branches(path.clone()))
+            .unwrap();
+
+        let current = branches.current.clone().expect("current branch");
+        assert!(branches.branches.iter().any(|b| b.name == "dev"));
+        assert!(branches.branches.iter().any(|b| b.name == current && b.current));
+
+        let worktree = runtime
+            .block_on(git_worktree_add(path.clone(), current))
+            .unwrap();
+        assert!(Path::new(&worktree).exists());
+        runtime
+            .block_on(git_worktree_remove(path, worktree.clone()))
+            .unwrap();
+        assert!(!Path::new(&worktree).exists());
 
         fs::remove_dir_all(&dir).ok();
     }

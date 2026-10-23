@@ -155,6 +155,9 @@ const strength = computed(() => {
               </div>
               <div class="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
                 <span>{{ ev.projectPath }}</span>
+                <span v-if="ev.branches?.length" class="font-mono">
+                  {{ ev.branches.join('、') }}
+                </span>
                 <span class="tabular-nums">{{ formatDateTime(ev.authoredDate) }}</span>
               </div>
               <p v-if="ev.relevance" class="mt-1 text-[11px] leading-relaxed text-muted-foreground">

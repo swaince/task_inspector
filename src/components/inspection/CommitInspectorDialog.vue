@@ -120,9 +120,13 @@ function fmtTime(iso: string) {
           <span>{{ fmtTime(commit.authoredDate) }}</span>
           <span>{{ commit.authorName }}</span>
           <span class="font-mono">{{ commit.projectPath }}</span>
-          <span v-if="commit.refName" class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px]">
+          <span
+            v-for="branch in (commit.branches?.length ? commit.branches : commit.refName ? [commit.refName] : [])"
+            :key="branch"
+            class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px]"
+          >
             <GitBranchIcon :size="10" />
-            {{ commit.refName }}
+            {{ branch }}
           </span>
           <span v-if="commit.stats" class="tabular-nums">
             +{{ commit.stats.additions }} / -{{ commit.stats.deletions }}

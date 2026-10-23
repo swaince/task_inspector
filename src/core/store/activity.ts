@@ -1,4 +1,4 @@
-import type { ActivityFailure } from '../engine/activity'
+import type { ActivityFailure, ProjectBranchActivity } from '../engine/activity'
 import type { GitCommit } from '../domain/types'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
@@ -31,6 +31,8 @@ export interface ActivitySnapshot {
   from: string
   to: string
   rows: ActivityRow[]
+  /** 区间内有提交的分支活动 */
+  branches: ProjectBranchActivity[]
   failures: ActivityFailure[]
   scannedAt: string
   /** 实时拉日报失败的原因；非空时申报列来自本地缓存 */

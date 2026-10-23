@@ -153,9 +153,12 @@ function codeExcerpt(commit: GitCommit): string | null {
 function formatCommit(commit: GitCommit, index: number, ctx: JudgeContext): string {
   const lines: string[] = []
   const time = formatDateTime(commit.authoredDate)
+  const branches = commit.branches?.length
+    ? ` [分支 ${commit.branches.join('、')}]`
+    : commit.refName ? ` [分支 ${commit.refName}]` : ''
   const stat = commit.stats ? ` +${commit.stats.additions}/-${commit.stats.deletions}` : ''
   const outside = isCoreWindow(commit.authoredDate, ctx.date, ctx.rules) ? '' : ' [当日核心时段之外]'
-  lines.push(`[${index + 1}] ${commit.id}  ${time}${stat}${outside}`)
+  lines.push(`[${index + 1}] ${commit.id}  ${time}${branches}${stat}${outside}`)
   lines.push(`    标题: ${commit.title}`)
   const body = commit.message.split('\n').slice(1).join('\n').trim()
   if (body)
@@ -241,7 +244,7 @@ export function buildSummaryPrompt(
   memberName: string,
   date: string,
   entries: Array<{ projectName: string, content: string, hours: number, verdict: string, reason: string }>,
-  orphans: Array<{ projectPath: string, title: string, authoredDate: string }>,
+  orphans: Array<{ projectPath: string, title: string, authoredDate: string, branches?: string[] }>,
   summary: {
     score: number
     totalHours: number
@@ -275,7 +278,7 @@ export function buildSummaryPrompt(
     const shown = orphans.slice(0, MAX_PROMPT_COMMITS)
     lines.push('有提交但没有任何日报条目引用：')
     for (const o of shown)
-      lines.push(`- ${o.projectPath} @ ${formatDateTime(o.authoredDate)}：${truncate(o.title, 100)}`)
+      lines.push(`- ${o.projectPath} @ ${formatDateTime(o.authoredDate)}${o.branches?.length ? ` [分支 ${o.branches.join('、')}]` : ''}：${truncate(o.title, 100)}`)
     if (orphans.length > shown.length)
       lines.push(`- ……另有 ${orphans.length - shown.length} 条，省略`)
   }

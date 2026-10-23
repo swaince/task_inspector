@@ -311,15 +311,16 @@ function fmtTime(iso: string) {
                   {{ c.title }}
                 </button>
 
-                <div class="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                   <span class="truncate font-mono" :title="c.projectPath">{{ c.projectPath }}</span>
                   <span
-                    v-if="c.refName"
+                    v-for="branch in c.branches ?? []"
+                    :key="branch"
                     class="inline-flex shrink-0 items-center gap-1 rounded border px-1 py-0.5 font-mono text-[10px]"
-                    :title="`只统计 ${c.refName} 分支上的提交`"
+                    :title="`该提交在 ${branch} 分支上`"
                   >
                     <GitBranchIcon :size="9" />
-                    {{ c.refName }}
+                    {{ branch }}
                   </span>
                   <span class="ml-auto shrink-0">{{ c.authorName }}</span>
                 </div>

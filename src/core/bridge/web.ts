@@ -427,6 +427,18 @@ export function createWebTransport(): Transport {
       return ''
     },
 
+    async gitBranches() {
+      return { current: null, defaultBranch: null, latestBranch: null, latestRef: null, branches: [] }
+    },
+
+    async gitWorktreeAdd() {
+      throw new Error('分支工作树只在桌面端可用')
+    },
+
+    async gitWorktreeRemove() {
+      // 浏览器没有 worktree 可清理
+    },
+
     async ensureDirs() {
       return []
     },
