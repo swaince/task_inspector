@@ -19,6 +19,9 @@ tauri-build = { version = "2.7.3", features = [] }
 tauri = { version = "2.12.4", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
+# 应用内更新：检查最新 release、下载带签名的更新包并安装
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 log = "0.4"
@@ -30,7 +33,7 @@ base64 = "0.22"
 # 而且 Token 留在 Rust 侧就不会进入 webview 的 JS 上下文。
 reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "process", "io-util", "rt"] }
 
 # 本地持久化。bundled 特性会把 SQLite 源码一起编进来，
 # 不依赖目标机器上的系统库，打包分发时少一个变量。

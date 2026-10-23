@@ -5,6 +5,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { createCalendar, formatDateKey } from '@/core/calendar/workCalendar'
+import { formatDateCN } from '@/lib/format'
 
 /**
  * 工作日历的月视图。
@@ -111,7 +112,7 @@ const holidayOptions = computed(() => {
     }
     if (current) {
       groups.push({
-        label: `${current.name} ${current.start.slice(5)}~${current.end.slice(5)}`,
+        label: `${current.name} ${formatDateCN(current.start)}~${formatDateCN(current.end)}`,
         value: current.start,
       })
     }
@@ -119,7 +120,7 @@ const holidayOptions = computed(() => {
   }
   if (current) {
     groups.push({
-      label: `${current.name} ${current.start.slice(5)}~${current.end.slice(5)}`,
+      label: `${current.name} ${formatDateCN(current.start)}~${formatDateCN(current.end)}`,
       value: current.start,
     })
   }

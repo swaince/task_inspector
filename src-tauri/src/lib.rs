@@ -1,8 +1,11 @@
 pub mod db;
 mod analysis;
+mod app_env;
 mod http;
 pub mod ldap;
 mod llm;
+mod mcp;
+mod shell;
 mod store;
 
 use db::Db;
@@ -18,7 +21,13 @@ pub fn run() {
     tauri::Builder::default()
         // 外链交给系统默认浏览器打开，并且只允许 http/https
         .plugin(tauri_plugin_opener::init())
+        // 自动更新：检查 GitHub Release 的 latest.json，下载并校验签名
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // 更新安装完成后由前端调用 relaunch 重启
+        .plugin(tauri_plugin_process::init())
         .manage(StreamRegistry::default())
+        .manage(mcp::McpManager::default())
+        .manage(shell::ShellRegistry::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -42,6 +51,11 @@ pub fn run() {
             llm::llm_cancel,
             db::settings_get,
             db::settings_set,
+            app_env::install_kind,
+            mcp::mcp_list_tools,
+            mcp::mcp_call_tool,
+            shell::shell_run,
+            shell::shell_cancel,
             db::reports_upsert,
             db::reports_by_date,
             db::reports_dates,

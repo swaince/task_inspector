@@ -13,6 +13,7 @@ import DatePicker from '@/components/common/DatePicker.vue'
 import VerdictBadge from '@/components/common/VerdictBadge.vue'
 import { useHistoryStore } from '@/core/store/history'
 import { needsFollowUp, scoreTone } from '@/core/domain/verdict'
+import { formatDateCN } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 /**
@@ -190,7 +191,9 @@ function scoreClass(score: number) {
 }
 
 function formatRange(batch: Batch) {
-  return batch.from === batch.to ? batch.from : `${batch.from} ~ ${batch.to}`
+  return batch.from === batch.to
+    ? formatDateCN(batch.from)
+    : `${formatDateCN(batch.from)} ~ ${formatDateCN(batch.to)}`
 }
 
 function clearRange() {
@@ -216,8 +219,8 @@ async function clearAll() {
           placeholder="按姓名、项目或仓库筛选…"
           class="h-8 w-64"
         />
-        <DatePicker v-model="from" class="w-36" placeholder="起始日期" />
-        <DatePicker v-model="to" class="w-36" placeholder="结束日期" />
+        <DatePicker v-model="from" class="w-44" placeholder="起始日期" />
+        <DatePicker v-model="to" class="w-44" placeholder="结束日期" />
         <Button v-if="from || to" variant="ghost" @click="clearRange">
           全部时间
         </Button>
@@ -330,7 +333,7 @@ async function clearAll() {
             class="border-b last:border-b-0"
           >
             <div class="flex flex-wrap items-baseline gap-3 bg-muted/30 px-4 py-2 text-xs">
-              <span class="font-medium tabular-nums">{{ date }}</span>
+              <span class="font-medium tabular-nums">{{ formatDateCN(date) }}</span>
               <span class="text-muted-foreground">
                 {{ resultsOfDate(batch, date).length }} 人
                 <template v-if="summaryOf(resultsOfDate(batch, date)).avg !== null">

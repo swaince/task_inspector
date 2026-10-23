@@ -10,6 +10,7 @@ import { useHistoryStore } from '@/core/store/history'
 import { useReportStore } from '@/core/store/reports'
 import { useRunnerStore } from '@/core/store/runner'
 import { useSettingsStore } from '@/core/store/settings'
+import { formatDateCN } from '@/lib/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -77,7 +78,7 @@ async function remove() {
         <template v-if="result">
           <div class="text-sm">
             <span class="font-medium">{{ result.memberName }}</span>
-            <span class="ml-2 text-muted-foreground">{{ result.date }}</span>
+            <span class="ml-2 text-muted-foreground">{{ formatDateCN(result.date) }}</span>
           </div>
 
           <div class="ml-auto flex gap-1.5">

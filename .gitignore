@@ -33,3 +33,6 @@ dist-ssr
 *.db-shm
 *.sqlite
 *.sqlite3
+
+# CI 构建时生成的 Tauri 版本/更新产物覆盖配置
+tauri-version.json

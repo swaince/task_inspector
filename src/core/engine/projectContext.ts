@@ -2,7 +2,7 @@ import type { GitLabClient } from '../adapters/gitlab'
 import type { RuleSettings } from '../config/settings'
 import type { DailyReport, GitCommit, Project } from '../domain/types'
 import type { ProjectProfile, RepoProfile } from './profile'
-import { formatDateTime, todayKey } from '@/lib/format'
+import { formatDateCN, formatDateTime, todayKey } from '@/lib/format'
 import { collectProjectCommits } from './activity'
 import { projectMatches, toProjectRefs } from './matching'
 import { shiftDate } from './window'
@@ -225,7 +225,7 @@ function describeProfile(profile: ProjectProfile) {
 function describeCommits(commits: GitCommit[]) {
   return commits.map((commit) => {
     const stats = commit.stats ? `，+${commit.stats.additions}/-${commit.stats.deletions}` : ''
-    const date = commit.committedDate.slice(0, 16).replace('T', ' ')
+    const date = formatDateTime(commit.committedDate)
     // 提交正文常写「为什么改」，比标题更有信息量；标题已经有了，只补正文
     const body = commit.message.split(/\r?\n/).slice(1).join(' ').trim()
     const detail = body ? ` —— ${clip(body, 140)}` : ''
@@ -242,7 +242,7 @@ interface ReportEntryLine {
 
 function describeReportEntries(entries: ReportEntryLine[]) {
   return entries.map((entry) => {
-    return `- ${entry.date} ${entry.memberName}（${round1(entry.hours)}h）：${clip(entry.content, MAX_ENTRY_CHARS)}`
+    return `- ${formatDateCN(entry.date)} ${entry.memberName}（${round1(entry.hours)}h）：${clip(entry.content, MAX_ENTRY_CHARS)}`
   }).join('\n')
 }
 
@@ -314,7 +314,7 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
   const modules = profile?.repos.reduce((sum, repo) => sum + repo.modules.length, 0) ?? 0
 
   const sections: string[] = []
-  sections.push(`# 项目资料\n时间范围：最近 ${days} 天（${from} ~ ${to}）\n\n## 项目基本信息\n${describeProject(input.project)}`)
+  sections.push(`# 项目资料\n时间范围：最近 ${days} 天（${formatDateCN(from)} ~ ${formatDateCN(to)}）\n\n## 项目基本信息\n${describeProject(input.project)}`)
 
   if (profile)
     sections.push(`## 项目代码画像\n${describeProfile(profile)}`)

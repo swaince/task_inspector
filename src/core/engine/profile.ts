@@ -89,6 +89,8 @@ export interface ProjectProfile {
   generatedAt: string
   headCommit?: string
   repos: RepoProfile[]
+  /** 直接扫描的本地目录；下次生成时用来回填 */
+  localPaths?: string[]
   narrative: string
   /** 模型基于统计写出的 markdown 报告（含架构、核心模块、风险） */
   report: string
@@ -97,6 +99,8 @@ export interface ProjectProfile {
 export interface ProfileOptions {
   /** 本地代码根目录 */
   codeRoot: string
+  /** 不走 GitLab 关联、直接扫描的本地目录 */
+  localPaths?: string[]
   /** 已加载的 skill 文本，拼进系统提示 */
   skills: string[]
   llm: LlmSettings
@@ -715,57 +719,80 @@ export async function buildRepoProfile(
     narrative: '',
   }
 
-  if (!opts.codeRoot.trim())
-    return { ...base, error: '还没有设置「代码目录」。到「设置 → 代码分析」填上本地代码根目录。' }
+  let found: { path: string, scan: Awaited<ReturnType<ReturnType<typeof transport>['scanRepo']>> } | null = null
+  const explicitLocal = repo.localPath?.trim().replace(/[\\/]+$/, '') ?? ''
 
-  let found = await locate(opts.codeRoot, repo)
-  const root = opts.codeRoot.trim().replace(/[\\/]+$/, '')
-  const expected = `${root}/${repo.pathWithNamespace}`
-
-  // 本地没有就自动克隆，用户不用自己去搬代码
-  if (!found && opts.autoClone && opts.gitlab?.token.trim() && opts.gitlab.baseUrl.trim()) {
-    opts.onProgress?.(`正在克隆 ${repo.pathWithNamespace}…`)
+  if (explicitLocal) {
+    // 用户直接指定了本地目录：不要求项目关联 GitLab，也不自动克隆
     try {
-      await transport().gitClone(
-        cloneUrl(opts.gitlab, repo),
-        expected,
-        repo.defaultBranch,
-        opts.cloneDepth ?? 200,
-      )
-      found = await locate(opts.codeRoot, repo)
+      const scan = await transport().scanRepo(explicitLocal)
+      if (!scan.files.length)
+        return { ...base, error: `本地目录 ${explicitLocal} 里没有可分析的文件。` }
+      found = { path: explicitLocal, scan }
     }
     catch (err) {
-      try {
-        await transport().ensureDirs(root, [repo.pathWithNamespace])
-      }
-      catch {
-        // 目录也建不出来时，错误信息里已经带了克隆失败原因，够了
-      }
       return {
         ...base,
-        error: `自动克隆失败：${err instanceof Error ? err.message : String(err)}`,
+        error: `无法扫描本地目录 ${explicitLocal}：${err instanceof Error ? err.message : String(err)}`,
+      }
+    }
+  }
+  else {
+    if (!opts.codeRoot.trim())
+      return { ...base, error: '还没有设置「代码目录」。到「设置 → 代码分析」填上本地代码根目录，或在这个页面直接添加本地目录。' }
+
+    found = await locate(opts.codeRoot, repo)
+    const root = opts.codeRoot.trim().replace(/[\\/]+$/, '')
+    const expected = `${root}/${repo.pathWithNamespace}`
+
+    // 本地没有就自动克隆，用户不用自己去搬代码
+    if (!found && opts.autoClone && opts.gitlab?.token.trim() && opts.gitlab.baseUrl.trim()) {
+      opts.onProgress?.(`正在克隆 ${repo.pathWithNamespace}…`)
+      try {
+        await transport().gitClone(
+          cloneUrl(opts.gitlab, repo),
+          expected,
+          repo.defaultBranch,
+          opts.cloneDepth ?? 200,
+        )
+        found = await locate(opts.codeRoot, repo)
+      }
+      catch (err) {
+        try {
+          await transport().ensureDirs(root, [repo.pathWithNamespace])
+        }
+        catch {
+          // 目录也建不出来时，错误信息里已经带了克隆失败原因，够了
+        }
+        return {
+          ...base,
+          error: `自动克隆失败：${err instanceof Error ? err.message : String(err)}`,
+        }
+      }
+    }
+
+    if (!found) {
+      // 没开自动克隆、或者没有 Token 时，把「应该放在哪」的目录结构建出来，
+      // 用户把代码放进去再重跑即可
+      let created: string[] = []
+      try {
+        created = await transport().ensureDirs(root, [repo.pathWithNamespace])
+      }
+      catch {
+        // 创建失败（权限、磁盘）就退回普通的「没找到」提示
+      }
+
+      return {
+        ...base,
+        error: created.length
+          ? `本地没有这份代码，已按仓库路径创建目录 ${expected}。开启「自动克隆」或把仓库放进去后重新生成。`
+          : `在 ${root} 下没找到 ${repo.pathWithNamespace}，目录也没能创建。检查代码目录是否存在、是否有写权限。`,
       }
     }
   }
 
-  if (!found) {
-    // 没开自动克隆、或者没有 Token 时，把「应该放在哪」的目录结构建出来，
-    // 用户把代码放进去再重跑即可
-    let created: string[] = []
-    try {
-      created = await transport().ensureDirs(root, [repo.pathWithNamespace])
-    }
-    catch {
-      // 创建失败（权限、磁盘）就退回普通的「没找到」提示
-    }
-
-    return {
-      ...base,
-      error: created.length
-        ? `本地没有这份代码，已按仓库路径创建目录 ${expected}。开启「自动克隆」或把仓库放进去后重新生成。`
-        : `在 ${root} 下没找到 ${repo.pathWithNamespace}，目录也没能创建。检查代码目录是否存在、是否有写权限。`,
-    }
-  }
+  if (!found)
+    return { ...base, error: '没有可扫描的本地代码目录。' }
 
   base.localPath = found.path
   base.files = found.scan.files.length
@@ -867,8 +894,30 @@ export async function buildProjectProfile(
   const client = createLlmClient(opts.llm)
   const system = withSkills(SYSTEM, opts.skills)
 
+  const localPaths = [...new Set(
+    (opts.localPaths ?? [])
+      .map(path => path.trim().replace(/[\\/]+$/, ''))
+      .filter(Boolean),
+  )]
+
+  const syntheticRepos: ProjectRepo[] = localPaths
+    .filter(path => !(project.repos ?? []).some(repo => repo.localPath === path))
+    .map((path, index) => {
+      const name = path.split(/[\\/]/).pop() || `local-${index + 1}`
+      return {
+        id: -(index + 1),
+        pathWithNamespace: name,
+        name,
+        webUrl: '',
+        linkKind: 'repo',
+        linkPath: path,
+        localPath: path,
+      }
+    })
+
+  const reposToScan = [...(project.repos ?? []), ...syntheticRepos]
   const repos: RepoProfile[] = []
-  for (const repo of project.repos ?? []) {
+  for (const repo of reposToScan) {
     opts.onProgress?.(`正在扫描 ${repo.pathWithNamespace}`)
     repos.push(await buildRepoProfile(client, system, project, repo, opts))
   }
@@ -911,6 +960,7 @@ export async function buildProjectProfile(
     generatedAt: new Date().toISOString(),
     headCommit,
     repos,
+    localPaths: localPaths.length ? localPaths : undefined,
     narrative,
     report,
   }

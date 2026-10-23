@@ -4,6 +4,7 @@ import { CalendarIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import WorkCalendarPicker from '@/components/common/WorkCalendarPicker.vue'
+import { formatDateCN } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 /**
@@ -44,13 +45,13 @@ function onSelect(next: string) {
         :id="props.id"
         variant="outline"
         :class="cn(
-          'w-full justify-start text-left font-normal',
+          'w-full justify-start text-left text-xs font-normal',
           !modelValue && 'text-muted-foreground',
           props.class,
         )"
       >
         <CalendarIcon :size="14" class="mr-2 shrink-0 opacity-70" />
-        <span class="tabular-nums">{{ modelValue || placeholder }}</span>
+        <span class="tabular-nums">{{ modelValue ? formatDateCN(modelValue) : placeholder }}</span>
       </Button>
     </PopoverTrigger>
     <PopoverContent class="w-auto p-2" align="start">

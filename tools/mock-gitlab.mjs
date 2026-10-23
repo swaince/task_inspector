@@ -23,10 +23,17 @@ const PORT = Number(process.argv[process.argv.indexOf('--port') + 1]) || 9939
 const PROJECTS = [
   // default_branch 是真实接口里会返回的字段，统计提交要按它取分支，所以假数据也带上
   { id: 101, path_with_namespace: 'rd-platform/payment-gateway', name: 'payment-gateway', default_branch: 'main' },
-  { id: 102, path_with_namespace: 'rd-platform/admin-console', name: 'admin-console', default_branch: 'main' },
+  { id: 102, path_with_namespace: 'rd-platform/admin-console', name: '管理后台', default_branch: 'main' },
   { id: 103, path_with_namespace: 'rd-platform/risk-engine', name: 'risk-engine', default_branch: 'develop' },
   { id: 104, path_with_namespace: 'infra/deploy-tools', name: 'deploy-tools', default_branch: 'main' },
   { id: 105, path_with_namespace: 'legacy/billing-old', name: 'billing-old', default_branch: 'master' },
+]
+
+/** 项目关联选择器用到的组；搜索同时匹配名称和完整路径 */
+const GROUPS = [
+  { id: 1, name: '研发平台', full_path: 'rd-platform', web_url: 'http://localhost:9939/groups/rd-platform' },
+  { id: 2, name: '支付组', full_path: 'rd-platform/payment', web_url: 'http://localhost:9939/groups/rd-platform/payment' },
+  { id: 3, name: '基础设施', full_path: 'infra', web_url: 'http://localhost:9939/groups/infra' },
 ]
 
 /** 日期固定为 2026-10-16，落在默认时间窗（10-15 20:00 ~ 10-17 08:00）内 */
@@ -223,15 +230,32 @@ function handleGitLab(pathname, query, res) {
     const scoped = query.get('membership') === 'true'
       ? PROJECTS.filter(p => p.id <= 103)
       : PROJECTS
-    const search = query.get('search')
+    const search = (query.get('search') || '').toLowerCase()
     const filtered = search
-      ? scoped.filter(p => p.path_with_namespace.includes(search))
+      ? scoped.filter(p =>
+        p.name.toLowerCase().includes(search)
+        || p.path_with_namespace.toLowerCase().includes(search),
+      )
       : scoped
 
     const page = Number(query.get('page') || 1)
     const perPage = Number(query.get('per_page') || 20)
     const start = (page - 1) * perPage
     return send(res, 200, filtered.slice(start, start + perPage).map(projectRef))
+  }
+
+  if (pathname === '/api/v4/groups') {
+    const search = (query.get('search') || '').toLowerCase()
+    const filtered = search
+      ? GROUPS.filter(g =>
+        g.name.toLowerCase().includes(search)
+        || g.full_path.toLowerCase().includes(search),
+      )
+      : GROUPS
+    const page = Number(query.get('page') || 1)
+    const perPage = Number(query.get('per_page') || 20)
+    const start = (page - 1) * perPage
+    return send(res, 200, filtered.slice(start, start + perPage))
   }
 
   const groupMatch = pathname.match(/^\/api\/v4\/groups\/(.+)\/projects$/)

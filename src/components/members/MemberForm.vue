@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { formatDateTime } from '@/lib/format'
 
 /**
  * 人员编辑表单。
@@ -229,7 +230,7 @@ function patch(part: Partial<MemberProfile>) {
       </div>
 
       <p v-if="draft.createdAt" class="text-[11px] text-muted-foreground">
-        最后更新 {{ draft.updatedAt?.slice(0, 16).replace('T', ' ') }}
+        最后更新 {{ draft.updatedAt ? formatDateTime(draft.updatedAt) : '' }}
       </p>
     </section>
   </div>

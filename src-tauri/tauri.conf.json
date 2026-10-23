@@ -46,5 +46,13 @@
         "languages": ["SimpChinese", "English"]
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/swaince/task_inspector/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZBMjQwNTQxNTkzQUQyOTcKUldTWDBqcFpRUVVrYW5UMHFwUTQrT1pWZGJVTTNxSWZLcmdvSlpmL1hpdGd0UlZqQ3pmNUx4V3oK"
+    }
   }
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ProjectProfile, RepoProfile } from '@/core/engine/profile'
-import { computed, onMounted, ref } from 'vue'
+import type { Project } from '@/core/domain/types'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AlertTriangleIcon,
@@ -8,8 +9,10 @@ import {
   FileCode2Icon,
   FileTextIcon,
   FlameIcon,
+  FolderGit2Icon,
   Loader2Icon,
   MessageSquareIcon,
+  PlusIcon,
   RefreshCwIcon,
   SparklesIcon,
   Trash2Icon,
@@ -19,9 +22,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import MessageResponse from '@/components/ai-elements/message/MessageResponse.vue'
+import { Input } from '@/components/ui/input'
+import StructuredReport from '@/components/activity/StructuredReport.vue'
 import ModuleGraph from '@/components/projects/ModuleGraph.vue'
 import { buildProjectProfile } from '@/core/engine/profile'
+import { GitLabClient } from '@/core/adapters/gitlab'
+import { resolveProjectLinks } from '@/core/adapters/projectLinks'
 import { transport } from '@/core/bridge'
 import { useProfileStore } from '@/core/store/profile'
 import { useProjectStore } from '@/core/store/projects'
@@ -46,14 +52,84 @@ const project = computed(() => projectStore.items.find(p => p.id === projectId.v
 const profile = computed<ProjectProfile | null>(() => profileStore.byProject[projectId.value] ?? null)
 
 const error = ref<string | null>(null)
+const notice = ref<string | null>(null)
 const skillWarnings = ref<string[]>([])
 const confirmRemoveOpen = ref(false)
 /** 没有 git 时克隆与热点都用不了，提前告诉用户，而不是等报错 */
 const gitMissing = ref(false)
 
+// 生成状态按项目取：A 项目在后台分析时切到 B，B 不继承 A 的进度和错误
+const loading = computed(() => profileStore.loadingByProject[projectId.value] ?? false)
+const generating = computed(() => profileStore.generatingByProject[projectId.value] ?? false)
+const progressMessage = computed(() => profileStore.progressByProject[projectId.value] ?? '')
+const storeError = computed(() => profileStore.errorByProject[projectId.value] ?? null)
+const displayError = computed(() => error.value ?? storeError.value)
+
 /** 实际生效的代码目录：配置留空时用应用数据目录下的默认值 */
 const codeRoot = computed(() => settingsStore.resolvedCodeRoot)
 const repoCount = computed(() => project.value?.repos?.length ?? 0)
+const linkCount = computed(() => project.value?.links?.length ?? 0)
+
+/**
+ * 不走 GitLab 关联、直接扫描的本地目录。
+ * 画像和项目对话的代码工具都能用；检查提交仍然需要 GitLab 仓库。
+ */
+const localPaths = ref<string[]>([])
+const localPathInput = ref('')
+const addingLocal = ref(false)
+
+watch(profile, (value) => {
+  localPaths.value = value?.localPaths ?? []
+}, { immediate: true })
+
+/** 有已解析仓库、有未解析的 GitLab 关联、或手动加了本地目录，都可以尝试生成 */
+const canGenerate = computed(() =>
+  repoCount.value > 0 || linkCount.value > 0 || localPaths.value.length > 0,
+)
+
+/**
+ * 生成前补齐仓库：用户可能只加了 GitLab 组/仓库但没点「解析关联仓库」。
+ * 这时先解析再生成，避免画像按钮看起来不可用。
+ */
+async function resolveLinksIfNeeded(p: Project): Promise<Project> {
+  if (p.repos?.length || !p.links?.length)
+    return p
+
+  const settings = settingsStore.settings
+  if (!settings.gitlab.baseUrl.trim() || !settings.gitlab.token.trim()) {
+    if (localPaths.value.length)
+      return p
+    throw new Error('项目已添加 GitLab 关联但还没解析；请先在「设置 → GitLab」填写地址和 Token，或在下面添加本地代码目录。')
+  }
+
+  profileStore.setProgress(p.id, '正在解析 GitLab 关联…')
+  const result = await resolveProjectLinks(
+    new GitLabClient(settings.gitlab),
+    p.links,
+    { perPage: settings.gitlab.perPage, maxProjects: settings.gitlab.maxProjects },
+  )
+
+  if (!result.repos.length) {
+    const detail = result.failures.length ? result.failures.join('；') : '关联没有解析出任何仓库'
+    if (localPaths.value.length) {
+      notice.value = `GitLab 关联解析失败，已改用本地代码目录：${detail}`
+      return p
+    }
+    throw new Error(`GitLab 关联解析失败：${detail}`)
+  }
+
+  const updated: Project = {
+    ...p,
+    repos: result.repos,
+    syncStatus: result.failures.length ? 'error' : 'synced',
+    syncError: result.failures.length ? result.failures[0] : undefined,
+    syncedAt: new Date().toISOString(),
+  }
+  await projectStore.save(updated)
+  if (result.failures.length)
+    notice.value = `部分关联解析失败：${result.failures.join('；')}`
+  return updated
+}
 
 onMounted(async () => {
   await projectStore.load()
@@ -70,9 +146,19 @@ onMounted(async () => {
   }
 })
 
-async function loadSkills(): Promise<string[]> {
-  const texts: string[] = []
+// 路由参数变化时组件会被复用；必须重新读取目标项目的画像，
+// 否则会停留在上一个项目的「正在分析」状态或旧画像。
+watch(projectId, async (id) => {
+  error.value = null
+  notice.value = null
   skillWarnings.value = []
+  confirmRemoveOpen.value = false
+  await profileStore.load(id)
+})
+
+async function loadSkills(): Promise<{ texts: string[], warnings: string[] }> {
+  const texts: string[] = []
+  const warnings: string[] = []
   for (const skill of settingsStore.settings.analysis.skills ?? []) {
     if (!skill.enabled || !skill.path.trim())
       continue
@@ -80,31 +166,74 @@ async function loadSkills(): Promise<string[]> {
       texts.push(await transport().readTextFile(skill.path.trim()))
     }
     catch (err) {
-      skillWarnings.value.push(`${skill.name || skill.path}：${err instanceof Error ? err.message : String(err)}`)
+      warnings.push(`${skill.name || skill.path}：${err instanceof Error ? err.message : String(err)}`)
     }
   }
-  return texts
+  return { texts, warnings }
+}
+
+async function addLocalPath() {
+  const path = localPathInput.value.trim().replace(/[\\/]+$/, '')
+  if (!path)
+    return
+  if (localPaths.value.some(item => item.toLowerCase() === path.toLowerCase())) {
+    localPathInput.value = ''
+    return
+  }
+
+  error.value = null
+  addingLocal.value = true
+  try {
+    const scan = await transport().scanRepo(path)
+    if (!scan.files.length) {
+      error.value = `目录里没有可分析的文件：${path}`
+      return
+    }
+    localPaths.value = [...localPaths.value, path]
+    localPathInput.value = ''
+  }
+  catch (err) {
+    error.value = `无法扫描本地目录：${err instanceof Error ? err.message : String(err)}`
+  }
+  finally {
+    addingLocal.value = false
+  }
+}
+
+function removeLocalPath(index: number) {
+  localPaths.value = localPaths.value.filter((_, i) => i !== index)
 }
 
 async function generate() {
   const p = project.value
   if (!p)
     return
-  if (!(p.repos?.length)) {
-    error.value = '这个项目还没有关联仓库。先到「项目」面板加上仓库或组，再生成画像。'
+  if (!canGenerate.value) {
+    error.value = '这个项目还没有 GitLab 关联，也没有添加本地代码目录。先加一个仓库/组，或在下面直接添加本地目录。'
     return
   }
 
+  const id = p.id
   error.value = null
-  profileStore.generating = true
-  profileStore.progress = '正在读取 skill…'
+  notice.value = null
+  profileStore.beginGenerate(id)
 
   try {
-    const skills = await loadSkills()
-    profileStore.progress = '正在扫描代码…'
-    const result = await buildProjectProfile(p, {
+    const target = await resolveLinksIfNeeded(p)
+    if (projectId.value !== id) {
+      profileStore.finishGenerate(id)
+      return
+    }
+
+    const { texts, warnings } = await loadSkills()
+    if (projectId.value === id)
+      skillWarnings.value = warnings
+
+    profileStore.setProgress(id, '正在扫描代码…')
+    const result = await buildProjectProfile(target, {
       codeRoot: codeRoot.value,
-      skills,
+      localPaths: localPaths.value,
+      skills: texts,
       llm: settingsStore.settings.llm,
       gitlab: {
         baseUrl: settingsStore.settings.gitlab.baseUrl,
@@ -112,16 +241,14 @@ async function generate() {
       },
       autoClone: settingsStore.settings.analysis.autoClone,
       cloneDepth: settingsStore.settings.analysis.cloneDepth,
-      onProgress: (message) => { profileStore.progress = message },
+      onProgress: (message) => { profileStore.setProgress(id, message) },
     })
     await profileStore.save(result)
-    profileStore.progress = ''
+    profileStore.finishGenerate(id)
+    localPaths.value = result.localPaths ?? []
   }
   catch (err) {
-    error.value = `生成失败：${err instanceof Error ? err.message : String(err)}`
-  }
-  finally {
-    profileStore.generating = false
+    profileStore.finishGenerate(id, `生成失败：${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -164,7 +291,8 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
             {{ project?.name ?? '项目画像' }}
           </h1>
           <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-            <span v-if="profile">生成于 {{ formatDateTime(profile.generatedAt) }}</span>
+            <span v-if="loading">读取中…</span>
+            <span v-else-if="profile">生成于 {{ formatDateTime(profile.generatedAt) }}</span>
             <span v-else>尚未生成</span>
             <template v-if="profile?.headCommit">
               <span>·</span>
@@ -173,6 +301,14 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
             <template v-if="repoCount">
               <span>·</span>
               <span>{{ repoCount }} 个仓库</span>
+            </template>
+            <template v-else-if="linkCount">
+              <span>·</span>
+              <span>{{ linkCount }} 条关联（未解析）</span>
+            </template>
+            <template v-if="localPaths.length">
+              <span>·</span>
+              <span>{{ localPaths.length }} 个本地目录</span>
             </template>
           </div>
         </div>
@@ -191,23 +327,28 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
             v-if="profile"
             variant="ghost"
             size="sm"
-            :disabled="profileStore.generating"
+            :disabled="generating"
             @click="confirmRemoveOpen = true"
           >
             <Trash2Icon :size="13" class="mr-1.5" />
             删除画像
           </Button>
-          <Button size="sm" :disabled="profileStore.generating || !repoCount" @click="generate">
-            <Loader2Icon v-if="profileStore.generating" :size="13" class="mr-1.5 animate-spin" />
+          <Button size="sm" :disabled="generating || !canGenerate" @click="generate">
+            <Loader2Icon v-if="generating" :size="13" class="mr-1.5 animate-spin" />
             <RefreshCwIcon v-else :size="13" class="mr-1.5" />
             {{ profile ? '重新生成' : '生成画像' }}
           </Button>
         </div>
       </div>
 
-      <Alert v-if="error" variant="destructive">
+      <Alert v-if="displayError" variant="destructive">
         <AlertTriangleIcon :size="14" />
-        <AlertDescription>{{ error }}</AlertDescription>
+        <AlertDescription>{{ displayError }}</AlertDescription>
+      </Alert>
+
+      <Alert v-if="notice" class="border-amber-500/40 bg-amber-500/5">
+        <AlertTriangleIcon :size="14" class="text-amber-600 dark:text-amber-500" />
+        <AlertDescription>{{ notice }}</AlertDescription>
       </Alert>
 
       <Alert v-if="gitMissing">
@@ -226,16 +367,83 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
         </AlertDescription>
       </Alert>
 
-      <Card v-if="profileStore.generating" class="py-4">
+      <Card v-if="generating" class="py-4">
         <CardContent class="flex items-center gap-2 px-4 text-xs text-muted-foreground">
           <Loader2Icon :size="14" class="animate-spin" />
-          {{ profileStore.progress || '正在生成…' }}
+          {{ progressMessage || '正在生成…' }}
         </CardContent>
       </Card>
 
-      <Card v-if="!codeRoot && !profile" class="py-4">
+      <Card v-if="loading && !profile && !generating" class="py-4">
+        <CardContent class="flex items-center gap-2 px-4 text-xs text-muted-foreground">
+          <Loader2Icon :size="14" class="animate-spin" />
+          正在读取项目画像…
+        </CardContent>
+      </Card>
+
+      <Card v-if="!codeRoot && !localPaths.length && !profile && !loading && !generating" class="py-4">
         <CardContent class="px-4 text-xs text-muted-foreground">
-          还没有可用的「代码目录」。到「设置 → 代码分析」看一下路径（留空会使用应用数据目录下的默认位置）。
+          还没有可用的「代码目录」。到「设置 → 代码分析」看一下路径，或在下面直接添加本地代码目录。
+        </CardContent>
+      </Card>
+
+      <Card class="gap-0 py-4">
+        <CardHeader class="px-4 pb-3">
+          <CardTitle class="flex items-center gap-1.5 text-sm">
+            <FolderGit2Icon :size="14" class="text-muted-foreground" />
+            扫描范围
+          </CardTitle>
+          <p class="text-xs text-muted-foreground">
+            可以扫描项目关联的 GitLab 仓库，也可以直接添加本地代码目录。
+            <strong class="font-medium text-foreground">不关联 GitLab 也能生成画像</strong>；
+            但「执行检查」仍需 GitLab 提交记录。
+          </p>
+        </CardHeader>
+        <CardContent class="space-y-3 px-4">
+          <p v-if="repoCount" class="text-[11px] text-muted-foreground">
+            已关联 {{ repoCount }} 个 GitLab 仓库，会按「代码目录 / 自动克隆」的规则扫描。
+          </p>
+          <p v-else-if="linkCount" class="text-[11px] text-amber-600 dark:text-amber-500">
+            已添加 {{ linkCount }} 条 GitLab 组/仓库关联，还没点「解析关联仓库」。
+            直接点「生成画像」会先自动解析，再开始扫描。
+          </p>
+
+          <div v-if="localPaths.length" class="space-y-1">
+            <div
+              v-for="(path, index) in localPaths"
+              :key="path"
+              class="flex items-center gap-2 rounded-md border px-2.5 py-1.5"
+            >
+              <FolderGit2Icon :size="13" class="shrink-0 text-muted-foreground" />
+              <span class="min-w-0 flex-1 truncate font-mono text-[11px]">{{ path }}</span>
+              <Button variant="ghost" size="sm" class="shrink-0 px-1.5" @click="removeLocalPath(index)">
+                <Trash2Icon :size="12" />
+              </Button>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <Input
+              v-model="localPathInput"
+              class="min-w-64 flex-1 font-mono text-xs"
+              placeholder="本地代码目录，例如 E:\\CodeCache\\group\\repo"
+              @keydown.enter.prevent="addLocalPath"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              class="text-xs"
+              :disabled="addingLocal || !localPathInput.trim()"
+              @click="addLocalPath"
+            >
+              <Loader2Icon v-if="addingLocal" :size="12" class="mr-1 animate-spin" />
+              <PlusIcon v-else :size="12" class="mr-1" />
+              添加目录
+            </Button>
+          </div>
+          <p class="text-[11px] text-muted-foreground">
+            目录必须是本机真实存在、并且有代码文件的路径。添加后会先扫描一次，空目录不会加入。
+          </p>
         </CardContent>
       </Card>
 
@@ -262,7 +470,9 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
             </CardTitle>
           </CardHeader>
           <CardContent class="px-4">
-            <MessageResponse :content="profile.report" class="prose-measure" />
+            <div class="prose-measure">
+              <StructuredReport :content="profile.report" />
+            </div>
           </CardContent>
         </Card>
 
@@ -372,7 +582,7 @@ function severityLabel(severity: 'high' | 'medium' | 'low') {
         </div>
       </template>
 
-      <Card v-else-if="!profileStore.generating" class="py-12">
+      <Card v-else-if="!generating && !loading" class="py-12">
         <CardContent class="text-center text-sm text-muted-foreground">
           还没有生成过画像。点右上角「生成画像」，会扫描本地代码、按模块归纳，并让模型写出每个模块在做什么。
         </CardContent>

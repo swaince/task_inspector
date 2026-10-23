@@ -1,10 +1,11 @@
 import type { AppSettings } from '../config/settings'
-import type { DailyReport, GitCommit, InspectionProgress, InspectionResult, MemberIdentityInput, MemberProfile } from '../domain/types'
+import type { DailyReport, GitCommit, GitLabProjectRef, InspectionProgress, InspectionResult, MemberIdentityInput, MemberProfile } from '../domain/types'
 import type { ProjectCatalog } from '../engine/projectCatalog'
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { transport } from '../bridge'
 import { GitLabClient } from '../adapters/gitlab'
+import type { CommitQuery } from '../adapters/gitlab'
 import { createDailyReportSource } from '../adapters/dailyReport'
 import { createLlmClient } from '../llm/client'
 import { runInspection } from '../engine/inspector'
@@ -15,6 +16,7 @@ import { useHistoryStore } from './history'
 import { useProjectStore } from './projects'
 import { useMemberStore } from './members'
 import { shiftDate } from '../engine/window'
+import { formatDateCN } from '@/lib/format'
 
 /**
  * 检查执行器。
@@ -91,6 +93,36 @@ export const useRunnerStore = defineStore('runner', () => {
     return Math.min(100, Math.round(((finished.value + inFlight) / total.value) * 100))
   })
 
+  /*
+   * 模型增量如果每个 token 都写响应式对象，LiveRunPanel 和 Markdown
+   * 会以每秒几十次的频率重渲染；24 个目标跑下来主线程会被拖住。
+   * 按 80ms 合并一次，既跟得上阅读节奏，也不会把页面卡死。
+   */
+  let thinkingTimer: ReturnType<typeof setTimeout> | null = null
+  const thinkingBuffer = new Map<string, string>()
+
+  function flushThinking() {
+    if (thinkingTimer) {
+      clearTimeout(thinkingTimer)
+      thinkingTimer = null
+    }
+    if (!thinkingBuffer.size)
+      return
+
+    const next = { ...thinking.value }
+    for (const [id, text] of thinkingBuffer)
+      next[id] = text.slice(-4000)
+    thinkingBuffer.clear()
+    thinking.value = next
+  }
+
+  function pushThinking(delta: string, entryId: string) {
+    activeEntryId.value = entryId === '__summary__' ? null : entryId
+    thinkingBuffer.set(entryId, (thinkingBuffer.get(entryId) ?? thinking.value[entryId] ?? '') + delta)
+    if (!thinkingTimer)
+      thinkingTimer = setTimeout(flushThinking, 100)
+  }
+
   async function ensureCatalog(force = false): Promise<ProjectCatalog | null> {
     const settings = settingsStore.settings
     const fingerprint = catalogFingerprint(settings)
@@ -120,28 +152,55 @@ export const useRunnerStore = defineStore('runner', () => {
     }
   }
 
-  function buildDeps(settings: AppSettings, signal: AbortSignal) {
+  function buildDeps(
+    settings: AppSettings,
+    signal: AbortSignal,
+    date: string,
+    gitlab: GitLabClient,
+    llm: ReturnType<typeof createLlmClient>,
+    reportSource: ReturnType<typeof createDailyReportSource>,
+    commitCache: Map<string, Promise<GitCommit[]>>,
+  ) {
     return {
       settings,
-      gitlab: new GitLabClient(settings.gitlab),
-      reportSource: createDailyReportSource(
-        settings.dailyReport,
-        Object.values(reportStore.cache).flat(),
-      ),
-      llm: createLlmClient(settings.llm),
+      gitlab,
+      reportSource,
+      llm,
       knownProjects: catalog.value?.projects ?? [],
       projects: projectStore.items,
       members: memberStore.items,
+      /*
+       * 同一天、同一个仓库的提交列表在整次执行里只请求一次。
+       * 两个成员检查同一天时，第二个成员直接复用；文件变更由引擎按作者
+       * 筛出本人提交后再补，不会再给全项目所有人的提交逐条拉 diff。
+       */
+      fetchCommits: (project: GitLabProjectRef, query: CommitQuery) => {
+        const key = [
+          date,
+          project.id,
+          query.since,
+          query.until,
+          query.refName ?? '',
+          query.perPage,
+          query.maxCommits,
+          query.fetchFileChanges ? '1' : '0',
+        ].join('|')
+        let pending = commitCache.get(key)
+        if (!pending) {
+          pending = gitlab.listCommits(project, query).catch((err) => {
+            // 失败不要留在缓存里，下一个人/下一次还能重试
+            commitCache.delete(key)
+            throw err
+          })
+          commitCache.set(key, pending)
+        }
+        return pending
+      },
       signal,
       onProgress: (p: InspectionProgress) => {
         progress.value = p
       },
-      onThinking: (delta: string, entryId: string) => {
-        activeEntryId.value = entryId === '__summary__' ? null : entryId
-        const prev = thinking.value[entryId] ?? ''
-        // 增量很碎，每次都新建对象会让 Vue 频繁触发渲染，这里限长避免内存膨胀
-        thinking.value = { ...thinking.value, [entryId]: (prev + delta).slice(-8000) }
-      },
+      onThinking: pushThinking,
       // 提交落库：留一份审计痕迹，同时作为全文检索的语料。
       // 这里刻意把 diff 正文剥掉再传：Rust 侧只存文件路径，正文传给过去也是白占 IPC，
       // 200 条提交的 diff 加起来能有几十 MB。
@@ -171,6 +230,15 @@ export const useRunnerStore = defineStore('runner', () => {
     const settings = settingsStore.settings
     const totalTargets = plans.reduce((s, p) => s + p.targets.length, 0)
 
+    // 整次执行共用一组客户端和数据源；提交列表按「日期 + 仓库」缓存
+    const gitlab = new GitLabClient(settings.gitlab)
+    const llm = createLlmClient(settings.llm)
+    const reportSource = createDailyReportSource(
+      settings.dailyReport,
+      Object.values(reportStore.cache).flat(),
+    )
+    const commitCache = new Map<string, Promise<GitCommit[]>>()
+
     /*
      * 一次执行（单日或区间）共用同一个 runId。
      * 历史页按它把「人 × 工作日」的多条结果收成一个批次，而不是散成一堆日期。
@@ -186,6 +254,11 @@ export const useRunnerStore = defineStore('runner', () => {
     results.value = []
     failures.value = []
     queue.value = plans.flatMap(p => p.targets)
+    if (thinkingTimer) {
+      clearTimeout(thinkingTimer)
+      thinkingTimer = null
+    }
+    thinkingBuffer.clear()
     thinking.value = {}
     activeEntryId.value = null
     abort = new AbortController()
@@ -201,7 +274,7 @@ export const useRunnerStore = defineStore('runner', () => {
             break
 
           currentLabel.value = plans.length > 1
-            ? `${plan.date} · ${target.member.name}（${done + 1}/${totalTargets}）`
+            ? `${formatDateCN(plan.date)} · ${target.member.name}（${done + 1}/${totalTargets}）`
             : `${target.member.name}（${done + 1}/${totalTargets}）`
 
           const report = target.report
@@ -210,7 +283,7 @@ export const useRunnerStore = defineStore('runner', () => {
           try {
             const result = await runInspection(
               { date: plan.date, member: target.member, report },
-              buildDeps(settings, abort.signal),
+              buildDeps(settings, abort.signal, plan.date, gitlab, llm, reportSource, commitCache),
             )
             const enriched: InspectionResult = {
               ...result,
@@ -248,6 +321,7 @@ export const useRunnerStore = defineStore('runner', () => {
       }
     }
     finally {
+      flushThinking()
       running.value = false
       currentLabel.value = ''
       abort = null

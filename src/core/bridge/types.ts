@@ -79,6 +79,29 @@ export interface LlmStreamHandle {
   done: Promise<void>
 }
 
+/** 本机命令执行。stdout/stderr 按行推给前端，最终结果由 invoke 的 Promise 返回。 */
+export type ShellEvent
+  = | { type: 'stdout', text: string }
+    | { type: 'stderr', text: string }
+
+export interface ShellRunRequest {
+  command: string
+  /** 必须是 allowedCwds 之一；Rust 侧会再次校验 */
+  cwd: string
+  allowedCwds: string[]
+  timeoutMs: number
+  runId: string
+}
+
+export interface ShellRunResult {
+  exitCode: number | null
+  durationMs: number
+  truncated: boolean
+  cancelled: boolean
+  timedOut: boolean
+  output: string
+}
+
 export interface InspectionFilter {
   from?: string
   to?: string
@@ -259,6 +282,13 @@ export interface Transport extends DataStore {
     req: LlmChatRequest,
     onEvent: (event: LlmStreamEvent) => void,
   ): Promise<LlmStreamHandle>
+  /** 执行本机命令（仅桌面端）；cwd 必须在 allowedCwds 里 */
+  shellRun(
+    req: ShellRunRequest,
+    onEvent: (event: ShellEvent) => void,
+  ): Promise<ShellRunResult>
+  /** 取消正在执行的命令并杀掉进程树 */
+  shellCancel(runId: string): Promise<void>
   /** 探测分析工具与环境依赖（codegraph / graphify / git）是否可用（仅桌面端） */
   toolStatus(kind: 'codegraph' | 'graphify' | 'git', configuredPath?: string): Promise<ToolStatus>
   analysisDefaults(): Promise<AnalysisDefaults>

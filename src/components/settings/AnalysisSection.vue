@@ -6,6 +6,7 @@ import {
   CheckCircle2Icon,
   Loader2Icon,
   RefreshCwIcon,
+  ShieldAlertIcon,
   Trash2Icon,
 } from '@lucide/vue'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -16,7 +17,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { transport } from '@/core/bridge'
+import { transport, isDesktop } from '@/core/bridge'
 import { useSettingsStore } from '@/core/store/settings'
 import { formatBytes, uid } from '@/lib/format'
 
@@ -32,6 +33,7 @@ import { formatBytes, uid } from '@/lib/format'
 
 const settingsStore = useSettingsStore()
 const cfg = computed(() => settingsStore.settings.analysis)
+const desktop = isDesktop()
 
 /** 默认路径由 settings store 统一解析，留空即用默认值 */
 const defaultCodeRoot = computed(() => settingsStore.analysisDefaults?.defaultCodeRoot ?? '')
@@ -56,7 +58,7 @@ const TOOLS: Array<{ kind: ToolKind, label: string, hint: string }> = [
   {
     kind: 'graphify',
     label: 'graphify',
-    hint: '需要 Python 3.10+：pipx install graphifyy（包名是两个 y）',
+    hint: '需要 Python 3.10+：pipx install "graphifyy[mcp]"',
   },
 ]
 
@@ -79,7 +81,7 @@ const INSTALL_COMMANDS: Record<ToolKind, string[]> = {
   codegraph: ['npm install --prefix <应用数据目录>/tools/codegraph @colbymchenry/codegraph'],
   graphify: [
     'python -m venv <应用数据目录>/tools/graphify-venv',
-    '<venv>/pip install graphifyy',
+    '<venv>/pip install "graphifyy[mcp]"',
   ],
 }
 
@@ -103,6 +105,14 @@ async function save() {
   catch (err) {
     error.value = `保存失败：${err instanceof Error ? err.message : String(err)}`
   }
+}
+
+function saveShellTimeout() {
+  const value = Number(cfg.value.shellTimeoutSeconds)
+  cfg.value.shellTimeoutSeconds = Number.isFinite(value)
+    ? Math.min(300, Math.max(5, Math.round(value)))
+    : 60
+  void save()
 }
 
 async function detect(kind: DetectKind) {
@@ -639,9 +649,80 @@ onMounted(async () => {
         </Button>
 
         <p class="text-[11px] leading-relaxed text-muted-foreground">
-          当前版本先保存配置；建立会话、列出和调用工具会在分析流程接入后生效。
-          内置的 codegraph / graphify 即使不配 MCP，也会直接用命令行调用。
+          项目会话会建立 stdio 会话，列出可用工具并按问题调用；codegraph / graphify 安装后会默认接入。
+          codegraph 需要项目目录已有 <code class="font-mono">.codegraph</code> 索引（<code class="font-mono">codegraph init</code>）；
+          graphify 需要先生成 <code class="font-mono">graphify-out/graph.json</code>（<code class="font-mono">graphify update &lt;path&gt;</code>）。
+          没有索引时工具会明确报错，不会退回成编造内容。
         </p>
+      </CardContent>
+    </Card>
+
+    <Card class="gap-0 py-4">
+      <CardHeader class="px-4 pb-3">
+        <CardTitle class="flex items-center gap-1.5 text-sm">
+          <ShieldAlertIcon :size="14" class="text-amber-600 dark:text-amber-500" />
+          命令执行（高危）
+        </CardTitle>
+        <CardDescription class="text-xs">
+          允许项目对话提议执行本机命令。每条命令仍然需要你在对话里逐条确认，不会自动执行。
+        </CardDescription>
+      </CardHeader>
+      <CardContent class="space-y-3 px-4">
+        <div class="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5">
+          <div class="min-w-0">
+            <div class="text-xs font-medium">允许模型提议执行命令</div>
+            <p class="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              只对桌面端、且项目画像里有本地仓库目录的项目生效。默认关闭。
+            </p>
+          </div>
+          <Switch
+            :model-value="cfg.allowShellCommands"
+            :disabled="!desktop"
+            @update:model-value="v => { cfg.allowShellCommands = !!v; save() }"
+          />
+        </div>
+
+        <div class="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5">
+          <div class="min-w-0">
+            <div class="text-xs font-medium">单条命令默认超时</div>
+            <p class="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              5–300 秒。超时后会终止命令及子进程；模型可以在单次调用里请求更短或更长的超时。
+            </p>
+          </div>
+          <div class="flex shrink-0 items-center gap-1.5">
+            <Input
+              v-model.number="cfg.shellTimeoutSeconds"
+              type="number"
+              min="5"
+              max="300"
+              class="h-8 w-20 text-xs"
+              :disabled="!desktop || !cfg.allowShellCommands"
+              @change="saveShellTimeout"
+            />
+            <span class="text-[11px] text-muted-foreground">秒</span>
+          </div>
+        </div>
+
+        <Alert class="border-amber-500/40 bg-amber-500/5">
+          <ShieldAlertIcon :size="14" class="text-amber-600 dark:text-amber-500" />
+          <AlertDescription class="space-y-1 text-[11px] leading-relaxed">
+            <p>
+              命令以当前用户权限在本机执行，<strong class="font-medium text-foreground">没有沙箱</strong>，
+              可以访问文件、网络、凭据和子进程。
+            </p>
+            <p>
+              工作目录限制在项目画像里的本地仓库路径，但这只决定起始目录；
+              命令仍可 <code class="font-mono">cd</code> 或使用绝对路径。
+            </p>
+            <p>
+              高风险模式（如 <code class="font-mono">rm -rf</code>、<code class="font-mono">git reset --hard</code>）
+              只会标红提示，不会自动拦截。确认卡片是唯一的安全边界。
+            </p>
+            <p v-if="!desktop" class="text-muted-foreground">
+              浏览器预览模式不能执行本机命令；这个开关只在桌面端生效。
+            </p>
+          </AlertDescription>
+        </Alert>
       </CardContent>
     </Card>
 

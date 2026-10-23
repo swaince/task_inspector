@@ -28,6 +28,7 @@ import { useMemberStore } from '@/core/store/members'
 import { useProjectStore } from '@/core/store/projects'
 import { useReportStore } from '@/core/store/reports'
 import { useSettingsStore } from '@/core/store/settings'
+import { formatDateCN, formatDateTime } from '@/lib/format'
 
 /**
  * 项目活动 · 单日单人详情。
@@ -180,7 +181,7 @@ function inspect(commit: GitCommit) {
 }
 
 function fmtTime(iso: string) {
-  return iso.replace('T', ' ').slice(5, 16)
+  return formatDateTime(iso)
 }
 </script>
 
@@ -198,7 +199,7 @@ function fmtTime(iso: string) {
             {{ project?.name ?? '项目活动详情' }}
           </h1>
           <div class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground">
-            <span class="tabular-nums">{{ date }}</span>
+            <span class="tabular-nums">{{ formatDateCN(date) }}</span>
             <span>·</span>
             <span>{{ memberName }}</span>
             <Badge v-if="!member" variant="outline" class="text-[10px] font-normal text-amber-600 dark:text-amber-500">

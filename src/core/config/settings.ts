@@ -372,6 +372,15 @@ export interface AnalysisSettings {
   skills: AnalysisSkill[]
   /** MCP 服务器配置。运行时会在分析流程里建立会话，工具列表用于代码分析 */
   mcpServers: AnalysisMcpServer[]
+  /**
+   * 允许模型在项目对话里提议执行本机命令。
+   *
+   * 默认关闭：命令以当前用户权限运行，没有沙箱，确认卡片是唯一的安全边界。
+   * 打开后每条命令仍然需要人工确认。
+   */
+  allowShellCommands: boolean
+  /** 单条命令的默认超时（秒），运行时限制在 5–300 */
+  shellTimeoutSeconds: number
 }
 
 export interface AnalysisSkill {
@@ -393,6 +402,8 @@ export interface AnalysisMcpServer {
   args: string
   /** 环境变量，每行 KEY=VALUE */
   env: string
+  /** 可选工作目录；graphify 这类按目录找 graph.json 的服务器会用到 */
+  cwd?: string
   enabled: boolean
 }
 
@@ -551,6 +562,8 @@ export function createDefaultSettings(): AppSettings {
       cloneDepth: 200,
       skills: [],
       mcpServers: [],
+      allowShellCommands: false,
+      shellTimeoutSeconds: 60,
     },
     workCalendar: {
       // 默认给 2026 年的中国法定节假日；换年份时在设置页改成对应地址

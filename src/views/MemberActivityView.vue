@@ -38,7 +38,7 @@ import { useMemberStore } from '@/core/store/members'
 import { useProjectStore } from '@/core/store/projects'
 import { useReportStore } from '@/core/store/reports'
 import { useSettingsStore } from '@/core/store/settings'
-import { dateKeyOffset, formatDateTime } from '@/lib/format'
+import { dateKeyOffset, formatDateCN, formatDateTime } from '@/lib/format'
 
 /**
  * 人员活动：某个人在一段时间里，在各项目上的产出与申报构成。
@@ -536,7 +536,7 @@ function deviationClass(stat: ProjectStat) {
 }
 
 function fmtTime(iso: string) {
-  return iso.replace('T', ' ').slice(5, 16)
+  return formatDateTime(iso)
 }
 
 /* ------------------------------------------------------------------ *
@@ -591,7 +591,7 @@ const reportHighlights = computed(() => {
   return [
     {
       label: '峰值日',
-      value: peak ? `${peak.date.slice(5)} · ${peak.commits} 条` : '—',
+      value: peak ? `${formatDateCN(peak.date)} · ${peak.commits} 条` : '—',
       hint: '提交条数最多的一天',
     },
     {
@@ -623,7 +623,8 @@ const REPORT_SYSTEM = `你是研发效能分析师。根据一个人在给定时
 3. 报告必须包含表格和图表（图表用 chart 代码块输出 JSON 规格），数字优先放进表格，不要用大段文字复述；
 4. 每个文字段落不超过三句话；
 5. 图表一律使用 chart 代码块，不要使用 mermaid；
-6. 只输出 markdown 正文：不要一级标题，不要开场白，不要套话总结。`
+6. 只输出 markdown 正文：不要一级标题，不要开场白，不要套话总结；
+7. 日期一律写成完整中文日期（例如「2026年10月21日」），不要写成「10-21」「10月21日」或 ISO 日期。`
 
 const report = computed(() => activityStore.snapshot?.report ?? '')
 const reportAt = computed(() => activityStore.snapshot?.reportAt ?? null)
@@ -631,7 +632,7 @@ const reportAt = computed(() => activityStore.snapshot?.reportAt ?? null)
 function buildReportPrompt(): string {
   const member = selected.value
   const dayLines = byDay.value.map(d =>
-    `${d.date}：提交 ${d.commits} 条，${d.projects} 个项目，+${d.additions}/-${d.deletions}，`
+    `${formatDateCN(d.date)}：提交 ${d.commits} 条，${d.projects} 个项目，+${d.additions}/-${d.deletions}，`
     + `活跃时段 ${d.activeBuckets} 个，有效工时 ${d.effectiveLow}-${d.effectiveHigh}h（仅代码产出），申报 ${d.hours}h`,
   )
   const projectLines = byProject.value.map(p =>
@@ -647,10 +648,10 @@ function buildReportPrompt(): string {
     .filter(r => r.reportedHours || r.reportedContents.length)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 80)
-    .map(r => `${r.date} ${r.projectName}：${r.reportedHours}h — ${r.reportedContents.join('；') || '（未填写内容）'}`)
+    .map(r => `${formatDateCN(r.date)} ${r.projectName}：${r.reportedHours}h — ${r.reportedContents.join('；') || '（未填写内容）'}`)
 
   const recent = rows.value
-    .flatMap(r => r.commits.map(c => `${r.date} ${c.title}`))
+    .flatMap(r => r.commits.map(c => `${formatDateCN(r.date)} ${c.title}`))
     .sort()
     .reverse()
     .slice(0, 25)
@@ -660,11 +661,11 @@ function buildReportPrompt(): string {
    * 模型画出来的 x 轴会缺天，趋势就断了。
    */
   const chartDays = reportDays.value.map(d =>
-    `${d.date}：提交 ${d.commits} 条，申报 ${d.reportedHours}h，代码估算 ${d.effectiveLow}-${d.effectiveHigh}h`,
+    `${formatDateCN(d.date)}：提交 ${d.commits} 条，申报 ${d.reportedHours}h，代码估算 ${d.effectiveLow}-${d.effectiveHigh}h`,
   )
 
   return `人员：${member?.name ?? ''}\n`
-    + `区间：${from.value} ~ ${to.value}（${rangeDays.value.length} 个自然日，其中工作日 ${workdayList.value.length} 天）\n`
+    + `区间：${formatDateCN(from.value)} ~ ${formatDateCN(to.value)}（${rangeDays.value.length} 个自然日，其中工作日 ${workdayList.value.length} 天）\n`
     + `提交 ${totalCommits.value} 条，申报 ${totalReported.value}h，涉及 ${byProject.value.length} 个项目。\n`
     + `口径：有效工时按提交会话估算，代码量按各项目开发模式修正；只统计代码产出，`
     + `不含会议、评审、答疑；工作饱和度 = 有效工时中值 / 8h。\n\n`
@@ -682,7 +683,8 @@ function buildReportPrompt(): string {
     + `## 每日趋势\n`
     + `用上面的「每日序列」原样输出两个图表，每个图表放在一个 chart 代码块里，内容是合法 JSON，数字不得改动：\n`
     + `1) 每日提交条数（柱状）；2) 每日申报工时（柱状）与代码估算（折线）。\n`
-    + '第一个图的格式：\n```chart\n{"title":"每日提交","unit":"条","labels":["10-12","10-13"],"series":[{"name":"提交","type":"bar","data":[8,6]}]}\n```\n'
+    + '第一个图的格式：\n```chart\n{"title":"每日提交","unit":"条","labels":["2026年10月12日","2026年10月13日"],"series":[{"name":"提交","type":"bar","data":[8,6]}]}\n```\n'
+    + `labels 一律写成「2026年10月21日」这种完整中文日期，不要用「10-21」「10月21日」。\n`
     + `第二个图在同一份 series 里放两项：{"name":"申报工时","type":"bar","data":[...]} 和 {"name":"代码估算","type":"line","data":[...]}。\n`
     + `labels 必须覆盖区间内每一天，没提交的天写 0；JSON 里不要写注释，也不要包进 markdown 表格。\n\n`
     + `## 项目投入\n`
@@ -856,7 +858,7 @@ async function generateReport() {
               <TableBody>
                 <TableRow v-for="day in byDay" :key="day.date">
                   <TableCell class="text-xs tabular-nums">
-                    {{ day.date }}
+                    {{ formatDateCN(day.date) }}
                     <Badge
                       v-if="!isWorkday(day.date)"
                       variant="outline"

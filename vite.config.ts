@@ -8,6 +8,11 @@ import { defineConfig, type Plugin } from 'vite'
 // Tauri 在 dev 时会注入 TAURI_DEV_HOST 用于局域网真机调试
 const host = process.env.TAURI_DEV_HOST
 
+/** 构建期注入应用版本；浏览器预览和更新弹窗都从这里取 */
+const pkg = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+) as { version: string }
+
 /* ------------------------------------------------------------------ *
  * 脚手架样式文件的构建期 shim
  * ------------------------------------------------------------------ */
@@ -68,6 +73,9 @@ function scaffoldCssShim(): Plugin {
 
 export default defineConfig({
   plugins: [scaffoldCssShim(), vue(), tailwindcss()],
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

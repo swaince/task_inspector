@@ -22,7 +22,7 @@ import { useHistoryStore } from '@/core/store/history'
 import { useReportStore } from '@/core/store/reports'
 import { useSettingsStore } from '@/core/store/settings'
 import { attentionWeight, followUpEntries, needsFollowUp, scoreTone } from '@/core/domain/verdict'
-import { todayKey } from '@/lib/format'
+import { formatDateCN, todayKey } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 const router = useRouter()
@@ -148,7 +148,7 @@ onMounted(() => history.load())
         <div class="flex items-center gap-3">
           <h2 class="text-sm font-medium">
             检查概览
-            <span class="ml-2 font-normal tabular-nums text-muted-foreground">{{ focusDate }}</span>
+            <span class="ml-2 font-normal tabular-nums text-muted-foreground">{{ formatDateCN(focusDate) }}</span>
           </h2>
           <Button
             variant="outline"
@@ -353,7 +353,7 @@ onMounted(() => history.load())
               :class="cn('tabular-nums', d === focusDate && 'border-primary/50 bg-accent')"
               @click="router.push({ name: 'history', query: { date: d } })"
             >
-              {{ d }}
+              {{ formatDateCN(d) }}
             </Button>
           </CardContent>
         </Card>

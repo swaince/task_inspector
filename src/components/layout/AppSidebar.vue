@@ -7,6 +7,7 @@ import {
   HistoryIcon,
   LayoutDashboardIcon,
   SettingsIcon,
+  SparklesIcon,
   UsersIcon,
   UsersRoundIcon,
 } from '@lucide/vue'
@@ -32,6 +33,7 @@ const items: NavItem[] = [
   { name: 'dashboard', label: '概览', icon: LayoutDashboardIcon },
   { name: 'inspect', label: '执行检查', icon: ClipboardCheckIcon },
   { name: 'history', label: '检查历史', icon: HistoryIcon },
+  { name: 'assistant', label: '应用助手', icon: SparklesIcon },
   { name: 'project-activity', label: '项目活动', icon: ActivityIcon },
   { name: 'member-activity', label: '人员活动', icon: UsersRoundIcon },
   { name: 'projects', label: '项目', icon: FolderGit2Icon },
@@ -63,7 +65,7 @@ const llmReady = computed(() => settingsStore.llmConfigured)
 
     <nav class="no-drag flex-1 space-y-0.5 overflow-y-auto px-2 py-2">
       <template v-for="(item, index) in items" :key="item.name">
-        <div v-if="index === 3 || index === 5" class="my-1 h-px bg-sidebar-border/70" />
+        <div v-if="index === 4 || index === 6" class="my-1 h-px bg-sidebar-border/70" />
         <RouterLink
           :to="{ name: item.name }"
           :class="

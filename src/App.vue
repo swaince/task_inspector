@@ -3,6 +3,7 @@ import { computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
+import UpdateChecker from '@/components/common/UpdateChecker.vue'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { applyTheme } from '@/composables/theme'
 import { useSettingsStore } from '@/core/store/settings'
@@ -58,6 +59,7 @@ onMounted(async () => {
         <slot name="header" />
 
         <div class="ml-auto flex shrink-0 items-center gap-1">
+          <UpdateChecker />
           <ThemeToggle />
         </div>
       </header>

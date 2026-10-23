@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { PromptInputMessage } from '@/components/ai-elements/prompt-input'
 import type { ProjectContext } from '@/core/engine/projectContext'
+import type { ToolTrace } from '@/core/agent/toolChat'
 import {
   AlertTriangleIcon,
   ArrowLeftIcon,
+  CheckIcon,
   DatabaseIcon,
   GitCommitHorizontalIcon,
   InfoIcon,
@@ -15,6 +17,8 @@ import {
   SparklesIcon,
   SquareIcon,
   Trash2Icon,
+  WrenchIcon,
+  XIcon,
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -47,6 +51,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { GitLabClient } from '@/core/adapters/gitlab'
+import { resolveMcpServers } from '@/core/agent/toolChat'
+import { createBuiltinTools } from '@/core/agent/builtin'
+import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
 import { contextRange, loadProjectContext } from '@/core/engine/projectContext'
 import { useProfileStore } from '@/core/store/profile'
 import { useProjectChatStore } from '@/core/store/projectChat'
@@ -81,6 +88,7 @@ const state = computed(() => chat.stateOf(projectId.value))
 const DAYS = 30
 
 const contextOpen = ref(false)
+const starting = ref(false)
 const initToken = ref(0)
 let buildPromise: Promise<ProjectContext | null> | null = null
 let buildAbort: AbortController | null = null
@@ -92,8 +100,44 @@ const stats = computed(() => context.value?.stats ?? null)
 const notFound = computed(() => projectStore.loaded && !project.value)
 
 const canAsk = computed(() =>
-  Boolean(project.value) && llmReady.value && Boolean(context.value) && !state.value.streaming,
+  Boolean(project.value)
+  && llmReady.value
+  && Boolean(context.value)
+  && !state.value.streaming
+  && !starting.value,
 )
+
+const pendingApproval = computed(() => state.value.pendingApproval)
+
+function approveTool() {
+  const pending = pendingApproval.value
+  if (!pending)
+    return
+  chat.approveTool(projectId.value, pending.id)
+}
+
+function denyTool() {
+  const pending = pendingApproval.value
+  if (!pending)
+    return
+  chat.denyTool(projectId.value, pending.id)
+}
+
+function traceMeta(trace: ToolTrace) {
+  const meta = trace.meta
+  if (!meta)
+    return ''
+  const parts: string[] = []
+  if (meta.exitCode !== null && meta.exitCode !== undefined)
+    parts.push(`退出码 ${String(meta.exitCode)}`)
+  if (meta.timedOut)
+    parts.push('超时')
+  if (meta.truncated)
+    parts.push('已截断')
+  if (meta.cancelled)
+    parts.push('已取消')
+  return parts.join(' · ')
+}
 
 const statusText = computed(() => {
   const s = stats.value
@@ -262,7 +306,7 @@ function onSubmit(payload: PromptInputMessage) {
 
 async function ask(text: string) {
   const content = text.trim()
-  if (!content || state.value.streaming)
+  if (!content || state.value.streaming || starting.value)
     return
   if (!llmReady.value) {
     state.value.buildError = '还没有配置模型。请到「设置 → 模型」填写后再提问。'
@@ -276,10 +320,37 @@ async function ask(text: string) {
   const active = context.value
   if (!active)
     return
-  void chat.send(projectId.value, content, {
-    context: active.text,
-    llm: settingsStore.settings.llm,
-  })
+
+  starting.value = true
+  try {
+    // 代码工具按当前项目画像里的本地目录发现；没有画像就只做普通资料问答
+    const profile = profileStore.byProject[projectId.value]
+    const projectPaths = (profile?.repos ?? [])
+      .map(repo => repo.localPath?.trim())
+      .filter((path): path is string => Boolean(path))
+    const servers = await resolveMcpServers(settingsStore.settings, projectPaths, projectId.value)
+    const builtinTools = createBuiltinTools({
+      settings: settingsStore.settings,
+      projectPaths,
+      projectId: projectId.value,
+    })
+    const gitlab = settingsStore.configured
+      ? new GitLabClient(settingsStore.settings.gitlab)
+      : null
+
+    void chat.send(projectId.value, content, {
+      context: active.text,
+      llm: settingsStore.settings.llm,
+      settings: settingsStore.settings,
+      servers,
+      builtinTools,
+      projectPaths,
+      gitlab,
+    })
+  }
+  finally {
+    starting.value = false
+  }
 }
 
 function stop() {
@@ -425,7 +496,7 @@ function openSettings() {
             <ConversationEmptyState
               class="h-auto! min-h-0! p-0!"
               title="问这个项目什么？"
-              description="回答只依据项目画像、最近 30 天提交和相关日报条目；资料里没有的会直接说明。"
+              description="回答会先读取项目画像、最近 30 天提交和日报；配置了 codegraph / graphify 时，会按问题调用代码工具查符号和调用关系，资料里没有的会直接说明。"
             >
               <template #icon>
                 <MessagesSquareIcon :size="28" />
@@ -478,6 +549,77 @@ function openSettings() {
                 </p>
               </template>
               <template v-else>
+                <ToolApprovalCard
+                  v-if="pendingApproval && pendingApproval.messageId === message.id"
+                  :approval="pendingApproval"
+                  class="mb-2"
+                  @approve="approveTool"
+                  @deny="denyTool"
+                />
+
+                <div v-if="message.approvalDecisions?.length" class="mb-2 space-y-1">
+                  <div
+                    v-for="decision in message.approvalDecisions"
+                    :key="decision.id"
+                    class="flex items-center gap-1.5 text-[11px]"
+                    :class="decision.decision === 'allowed'
+                      ? 'text-emerald-600 dark:text-emerald-500'
+                      : 'text-muted-foreground'"
+                  >
+                    <CheckIcon v-if="decision.decision === 'allowed'" :size="12" class="shrink-0" />
+                    <XIcon v-else :size="12" class="shrink-0" />
+                    <span class="truncate">
+                      {{ decision.decision === 'allowed' ? '已允许' : '未执行' }}：{{ decision.title }}
+                      <template v-if="decision.message"> · {{ decision.message }}</template>
+                    </span>
+                  </div>
+                </div>
+
+                <div v-if="message.toolTraces?.length" class="mb-2 space-y-1">
+                  <details
+                    v-for="(trace, traceIndex) in message.toolTraces"
+                    :key="traceIndex"
+                    class="overflow-hidden rounded-md border bg-muted/20"
+                  >
+                    <summary class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[11px]">
+                      <WrenchIcon :size="12" class="shrink-0 text-muted-foreground" />
+                      <span class="truncate font-mono">{{ trace.tool }}</span>
+                      <span v-if="traceMeta(trace)" class="shrink-0 text-muted-foreground">
+                        {{ traceMeta(trace) }}
+                      </span>
+                      <span
+                        class="ml-auto shrink-0"
+                        :class="trace.error ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-500'"
+                      >
+                        {{ trace.error ? '失败' : `${(trace.durationMs / 1000).toFixed(1)}s` }}
+                      </span>
+                    </summary>
+                    <div class="space-y-1 border-t px-2 py-1.5">
+                      <pre class="max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">{{ JSON.stringify(trace.arguments, null, 2) }}</pre>
+                      <pre
+                        v-if="trace.error || trace.result"
+                        class="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground"
+                      >{{ trace.error || trace.result }}</pre>
+                    </div>
+                  </details>
+                </div>
+
+                <div
+                  v-if="message.status && (message.content || !state.streaming)"
+                  class="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"
+                >
+                  <Loader2Icon v-if="state.streaming" :size="11" class="animate-spin" />
+                  <WrenchIcon v-else :size="11" />
+                  {{ message.status }}
+                </div>
+
+                <div
+                  v-if="message.toolErrors?.length"
+                  class="mb-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-400"
+                >
+                  工具或命令未完成：{{ message.toolErrors.slice(0, 2).join('；') }}
+                </div>
+
                 <MessageResponse
                   v-if="message.content"
                   :content="message.content"
@@ -488,7 +630,7 @@ function openSettings() {
                   class="flex items-center gap-2 py-1 text-xs text-muted-foreground"
                 >
                   <Loader2Icon :size="13" class="animate-spin" />
-                  <Shimmer>正在阅读项目资料…</Shimmer>
+                  <Shimmer>{{ message.status || '正在阅读项目资料…' }}</Shimmer>
                 </div>
                 <p
                   v-if="message.error"
@@ -538,7 +680,7 @@ function openSettings() {
           </PromptInput>
 
           <p class="text-[11px] leading-relaxed text-muted-foreground">
-            Enter 发送，Shift + Enter 换行。项目资料会发送给「设置 → 模型」中配置的服务。
+            Enter 发送，Shift + Enter 换行。项目资料和代码工具查询结果会发送给「设置 → 模型」中配置的服务。
           </p>
         </div>
       </div>

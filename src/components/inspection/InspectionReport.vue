@@ -2,7 +2,8 @@
 import type { InspectionResult } from '@/core/domain/types'
 import { computed, ref } from 'vue'
 import { ClockIcon, CpuIcon, GitPullRequestArrowIcon, ListChecksIcon, SparklesIcon } from '@lucide/vue'
-import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message'
+import { Message, MessageContent } from '@/components/ai-elements/message'
+import StructuredReport from '@/components/activity/StructuredReport.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import CommitTimeline from './CommitTimeline.vue'
 import EntryRow from './EntryRow.vue'
@@ -257,7 +258,9 @@ const hasAttention = computed(() =>
       </div>
       <Message from="assistant" class="max-w-none">
         <MessageContent class="max-w-none">
-          <MessageResponse :content="result.narrative" class="prose-measure" />
+          <div class="prose-measure">
+            <StructuredReport :content="result.narrative" />
+          </div>
         </MessageContent>
       </Message>
     </div>

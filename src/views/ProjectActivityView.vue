@@ -30,7 +30,7 @@ import { useMemberStore } from '@/core/store/members'
 import { useProjectStore } from '@/core/store/projects'
 import { useReportStore } from '@/core/store/reports'
 import { useSettingsStore } from '@/core/store/settings'
-import { dateKeyOffset, formatDateTime } from '@/lib/format'
+import { dateKeyOffset, formatDateCN, formatDateTime } from '@/lib/format'
 
 /**
  * 项目活动：某个项目在一段时间里，谁提交了什么、谁在日报里报了什么。
@@ -300,7 +300,7 @@ const reportHighlights = computed(() => {
   return [
     {
       label: '峰值日',
-      value: peak ? `${peak.date.slice(5)} · ${peak.commits} 条` : '—',
+      value: peak ? `${formatDateCN(peak.date)} · ${peak.commits} 条` : '—',
       hint: peak && total ? `占区间提交的 ${Math.round((peak.commits / total) * 100)}%` : '区间内没有提交',
     },
     {
@@ -332,12 +332,13 @@ const REPORT_SYSTEM = `你是研发效能分析师。根据一个项目在一段
 3. 报告必须包含表格和图表（图表用 chart 代码块输出 JSON 规格），数字优先放进表格，不要用大段文字复述；
 4. 每个文字段落不超过三句话；
 5. 图表一律使用 chart 代码块，不要使用 mermaid；
-6. 只输出 markdown 正文：不要一级标题，不要开场白，不要套话总结。`
+6. 只输出 markdown 正文：不要一级标题，不要开场白，不要套话总结；
+7. 日期一律写成完整中文日期（例如「2026年10月21日」），不要写成「10-21」「10月21日」或 ISO 日期。`
 
 function buildReportPrompt(): string {
   const project = selected.value
   const dayLines = byDay.value.slice(0, 62).map(d =>
-    `${d.date}：提交 ${d.commits} 条，${d.people} 人参与，+${d.additions}/-${d.deletions}，`
+    `${formatDateCN(d.date)}：提交 ${d.commits} 条，${d.people} 人参与，+${d.additions}/-${d.deletions}，`
     + `申报 ${d.hours}h，有效工时 ${d.effectiveLow}-${d.effectiveHigh}h（仅代码产出），`
     + `有提交未申报 ${d.missingPeople} 人`,
   )
@@ -346,14 +347,14 @@ function buildReportPrompt(): string {
     + `+${p.additions}/-${p.deletions}，申报 ${p.hours}h，有提交未申报 ${p.missingDays} 天`,
   )
   const recent = rows.value
-    .flatMap(r => r.commits.map(c => `${r.date} ${c.authorName}：${c.title}`))
+    .flatMap(r => r.commits.map(c => `${formatDateCN(r.date)} ${c.authorName}：${c.title}`))
     .sort()
     .reverse()
     .slice(0, 25)
 
   /* 图表要按完整日序列画，包括没有记录的天，否则趋势会断 */
   const chartDays = reportDays.value.map(d =>
-    `${d.date}：提交 ${d.commits} 条，申报 ${d.reportedHours}h，代码估算 ${d.effectiveLow}-${d.effectiveHigh}h`,
+    `${formatDateCN(d.date)}：提交 ${d.commits} 条，申报 ${d.reportedHours}h，代码估算 ${d.effectiveLow}-${d.effectiveHigh}h`,
   )
 
   /*
@@ -367,10 +368,10 @@ function buildReportPrompt(): string {
     .filter(r => r.reported && (r.contents.length || r.hours))
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 80)
-    .map(r => `${r.date} ${r.memberName}：${r.hours}h — ${r.contents.join('；') || '（日报未填写内容）'}`)
+    .map(r => `${formatDateCN(r.date)} ${r.memberName}：${r.hours}h — ${r.contents.join('；') || '（日报未填写内容）'}`)
 
   return `项目：${project?.name ?? ''}${project?.code ? `（${project.code}）` : ''}\n`
-    + `区间：${from.value} ~ ${to.value}（${dates.value.length} 个自然日，其中工作日 ${workdayList.value.length} 天）\n`
+    + `区间：${formatDateCN(from.value)} ~ ${formatDateCN(to.value)}（${dates.value.length} 个自然日，其中工作日 ${workdayList.value.length} 天）\n`
     + `提交 ${totals.value.commits} 条，涉及 ${totals.value.people} 人；有提交未申报 ${totals.value.missingInReport} 条记录。\n`
     + `口径：有效工时按人按天估算后求和（代码量按「${DEV_MODE_LABEL[devMode.value]}」模式修正），`
     + `只统计代码产出（提交、活跃时段、改动量），不含会议、评审、答疑；数值是区间，不是精确工时。\n\n`
@@ -388,7 +389,8 @@ function buildReportPrompt(): string {
     + `## 每日趋势\n`
     + `用上面的「每日序列」原样输出两个图表，每个图表放在一个 chart 代码块里，内容是合法 JSON，数字不得改动：\n`
     + `1) 每日提交条数（柱状）；2) 每日申报工时（柱状）与代码估算（折线）。\n`
-    + '第一个图的格式：\n```chart\n{"title":"每日提交","unit":"条","labels":["10-12","10-13"],"series":[{"name":"提交","type":"bar","data":[8,6]}]}\n```\n'
+    + '第一个图的格式：\n```chart\n{"title":"每日提交","unit":"条","labels":["2026年10月12日","2026年10月13日"],"series":[{"name":"提交","type":"bar","data":[8,6]}]}\n```\n'
+    + `labels 一律写成「2026年10月21日」这种完整中文日期，不要用「10-21」「10月21日」。\n`
     + `第二个图在同一份 series 里放两项：{"name":"申报工时","type":"bar","data":[...]} 和 {"name":"代码估算","type":"line","data":[...]}。\n`
     + `labels 必须覆盖区间内每一天，没提交的天写 0；JSON 里不要写注释，也不要包进 markdown 表格。\n\n`
     + `## 人员投入\n`
@@ -599,7 +601,7 @@ function matchReportEntry(entry: { projectName: string, projectCode?: string }) 
 }
 
 function fmtTime(iso: string) {
-  return iso.replace('T', ' ').slice(5, 16)
+  return formatDateTime(iso)
 }
 </script>
 
@@ -674,7 +676,7 @@ function fmtTime(iso: string) {
 
       <Alert v-if="noReportData">
         <AlertDescription>
-          {{ from }} ~ {{ to }} 这几天源系统没有返回任何日报，所以「申报」一列会全是空的——
+          {{ formatDateCN(from) }} ~ {{ formatDateCN(to) }} 这几天源系统没有返回任何日报，所以「申报」一列会全是空的——
           这不代表员工漏报。先确认「设置 → 日报系统」能连上、日期区间没填错。
         </AlertDescription>
       </Alert>
@@ -765,7 +767,7 @@ function fmtTime(iso: string) {
                 title="查看当天详情"
                 @click="openDetail(row)"
               >
-                <TableCell class="text-xs tabular-nums">{{ row.date }}</TableCell>
+                <TableCell class="text-xs tabular-nums">{{ formatDateCN(row.date) }}</TableCell>
                 <TableCell class="text-xs">
                   {{ row.memberName }}
                   <span v-if="row.memberKey.startsWith('author:')" class="ml-1 text-[10px] text-muted-foreground">
@@ -838,7 +840,7 @@ function fmtTime(iso: string) {
               <TableBody>
                 <TableRow v-for="day in byDay" :key="day.date">
                   <TableCell class="text-xs tabular-nums">
-                    {{ day.date }}
+                    {{ formatDateCN(day.date) }}
                     <Badge
                       v-if="!isWorkday(day.date)"
                       variant="outline"

@@ -11,13 +11,30 @@ export function percent(value: number, digits = 1) {
   return `${(value * 100).toFixed(digits)}%`
 }
 
-/** ISO 时间转成本地可读的 MM-DD HH:mm */
+/**
+ * 日期键 / ISO 日期统一显示成中文全日期。
+ *
+ * 结果、表格、图表和提示词里都走这里，避免同一个日期在不同地方出现
+ * 「10-21」「2026-10-21」「10月21日」几种写法。
+ */
+export function formatDateCN(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!match)
+    return value
+  return `${match[1]}年${Number(match[2])}月${Number(match[3])}日`
+}
+
+/** ISO 时间转成本地可读的「2026年10月21日 14:30」 */
 export function formatDateTime(iso: string) {
+  const dateOnly = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (dateOnly)
+    return formatDateCN(iso)
+
   const d = new Date(iso)
   if (Number.isNaN(d.getTime()))
     return iso
   const p = (n: number) => String(n).padStart(2, '0')
-  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 export function formatDuration(ms: number) {

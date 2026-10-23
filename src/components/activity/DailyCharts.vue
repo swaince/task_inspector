@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import ReportChart from './ReportChart.vue'
+import { formatDateCN } from '@/lib/format'
 
 /**
  * 活动页内嵌的每日趋势图。
@@ -25,7 +26,7 @@ const props = defineProps<{
   workdayDates?: string[]
 }>()
 
-const labels = computed(() => props.days.map(d => d.date.slice(5)))
+const labels = computed(() => props.days.map(d => formatDateCN(d.date)))
 
 const commitSpec = computed(() => ({
   title: '每日提交',

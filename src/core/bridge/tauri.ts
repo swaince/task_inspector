@@ -6,6 +6,9 @@ import type {
   LlmChatRequest,
   LlmStreamEvent,
   ProfileRow,
+  ShellEvent,
+  ShellRunRequest,
+  ShellRunResult,
   Transport,
 } from './types'
 
@@ -68,6 +71,28 @@ export function createTauriTransport(): Transport {
         },
         done,
       }
+    },
+
+    async shellRun(req: ShellRunRequest, onEvent: (event: ShellEvent) => void) {
+      const { invoke } = await core()
+      const ChannelCtor = await getChannelCtor()
+      const channel = new ChannelCtor<ShellEvent>()
+      channel.onmessage = onEvent
+
+      // Rust 在命令退出、超时或被杀掉后返回；结束信号就是 invoke 的 resolve
+      return invoke<ShellRunResult>('shell_run', {
+        command: req.command,
+        cwd: req.cwd,
+        allowedCwds: req.allowedCwds,
+        timeoutMs: req.timeoutMs,
+        runId: req.runId,
+        onEvent: channel,
+      })
+    },
+
+    async shellCancel(runId: string) {
+      const { invoke } = await core()
+      await invoke('shell_cancel', { runId })
     },
 
     async settingsGet() {

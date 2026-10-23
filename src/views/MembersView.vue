@@ -27,6 +27,7 @@ import { HttpDailyReportSource } from '@/core/adapters/dailyReport'
 import { createMemberDraft, useMemberStore } from '@/core/store/members'
 import { useReportStore } from '@/core/store/reports'
 import { useSettingsStore } from '@/core/store/settings'
+import { formatDateCN } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 const memberStore = useMemberStore()
@@ -512,7 +513,7 @@ onMounted(() => Promise.all([memberStore.load(), reportStore.load()]))
               <TableCell class="text-xs text-muted-foreground">
                 <template v-if="m.usageCount">
                   {{ m.usageCount }} 天
-                  <div class="text-[11px]">最近 {{ m.lastReportDate }}</div>
+                  <div class="text-[11px]">最近 {{ m.lastReportDate ? formatDateCN(m.lastReportDate) : '—' }}</div>
                 </template>
                 <span v-else>无</span>
               </TableCell>

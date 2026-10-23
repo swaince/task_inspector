@@ -439,6 +439,14 @@ export function createWebTransport(): Transport {
       throw new Error('读取本地文件只在桌面端可用')
     },
 
+    async shellRun() {
+      throw new Error('命令执行只在桌面端可用，浏览器预览模式无法运行本机命令')
+    },
+
+    async shellCancel() {
+      // 浏览器没有进程可取消
+    },
+
     async profilesGet() {
       return []
     },

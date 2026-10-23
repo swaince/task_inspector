@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { GitLabClient } from '@/core/adapters/gitlab'
 import { openExternal } from '@/core/bridge'
 import { useSettingsStore } from '@/core/store/settings'
+import { formatDateTime } from '@/lib/format'
 
 /**
  * 提交详情。
@@ -99,7 +100,7 @@ function lineClass(line: string) {
 const wrap = ref(true)
 
 function fmtTime(iso: string) {
-  return iso.replace('T', ' ').slice(0, 16)
+  return formatDateTime(iso)
 }
 </script>
 

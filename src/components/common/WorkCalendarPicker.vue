@@ -9,6 +9,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useWorkCalendar } from '@/core/calendar/useWorkCalendar'
 import { formatDateKey, parseDateKey } from '@/core/calendar/workCalendar'
+import { formatDateCN } from '@/lib/format'
 
 /**
  * 日期选择器里的紧凑版工作日历。
@@ -89,7 +90,7 @@ const hoveredInfo = computed(() => dayInfo(hovered.value))
 const hoveredText = computed(() => {
   const info = hoveredInfo.value
   const base = info.workday ? '工作日' : '休息日'
-  return `${hovered.value.slice(5)} · ${base}${info.name ? ` · ${info.name}` : ''}`
+  return `${formatDateCN(hovered.value)} · ${base}${info.name ? ` · ${info.name}` : ''}`
 })
 
 function shiftMonth(delta: number) {

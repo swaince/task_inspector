@@ -159,6 +159,11 @@ export interface ProjectRepo {
   /** 来自哪条链接，同步失败时能定位到具体来源 */
   linkKind: 'repo' | 'group'
   linkPath: string
+  /**
+   * 直接指定的本地代码目录（不经过 GitLab 关联）。
+   * 只存在于画像生成的内存数据里，不写回项目配置。
+   */
+  localPath?: string
 }
 
 export interface Project {

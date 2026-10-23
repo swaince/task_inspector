@@ -15,7 +15,7 @@ import type {
   Project,
   VerdictLevel,
 } from '../domain/types'
-import type { GitLabClient } from '../adapters/gitlab'
+import type { CommitQuery, GitLabClient } from '../adapters/gitlab'
 import type { DailyReportSource } from '../adapters/dailyReport'
 import type { LlmClient } from '../llm/client'
 import { AdapterError } from '../adapters/gitlab'
@@ -59,6 +59,13 @@ export interface InspectorDeps {
   projects: Project[]
   /** 人员实体，用于把日报里的人对应到 GitLab 账号 */
   members: MemberProfile[]
+  /**
+   * 拉取提交列表的入口。
+   *
+   * 执行器会按「日期 + 仓库」缓存原始提交：同一天的多个成员共享一次列表请求，
+   * 不再每个人各拉一遍；文件变更由下面按成员筛选后再补。
+   */
+  fetchCommits?: (project: GitLabProjectRef, query: CommitQuery) => Promise<GitCommit[]>
   onProgress?: (progress: InspectionProgress) => void
   /** LLM 判定的增量输出，用于界面上的实时推理展示 */
   onThinking?: (delta: string, entryId: string) => void
@@ -126,6 +133,16 @@ function globToRegExp(glob: string): RegExp {
 /* ------------------------------------------------------------------ *
  * 主流程
  * ------------------------------------------------------------------ */
+
+/** 结果里不保留 diff 正文，只留路径和行数统计 */
+function leanCommit(commit: GitCommit): GitCommit {
+  if (!commit.fileChanges?.length)
+    return commit
+  return {
+    ...commit,
+    fileChanges: commit.fileChanges.map(({ patch: _patch, ...rest }) => rest),
+  }
+}
 
 export async function runInspection(
   input: RunInspectionInput,
@@ -195,7 +212,7 @@ export async function runInspection(
       if (signal?.aborted)
         break
       try {
-        const raw = await deps.gitlab.listCommits(project, {
+        const query: CommitQuery = {
           since: window.since,
           until: window.until,
           // 只看仓库的默认分支，避免把未合入的分支提交算成当天的工作
@@ -213,9 +230,30 @@ export async function runInspection(
            */
           perPage: settings.gitlab.perPage,
           maxCommits: settings.rules.maxCommitsPerProject,
-          fetchFileChanges: settings.rules.fetchFileChanges,
-        })
-        commits.push(...raw.filter(c => commitBelongsTo(c, identity)))
+          fetchFileChanges: false,
+          signal,
+        }
+
+        // 列表按日期 + 仓库缓存；同一仓库同一天被多个成员检查时只请求一次。
+        const raw = deps.fetchCommits
+          ? await deps.fetchCommits(project, query)
+          : await deps.gitlab.listCommits(project, query)
+
+        /*
+         * 先筛出本人的提交，再只给这些提交补 diff。
+         *
+         * 之前是 listCommits 直接把项目当天所有人的 diff 都拉回来，
+         * 2 人 × 12 天 × 4 个项目会变成近万次 diff 请求；真正参与判定的
+         * 往往只有其中一小部分。克隆一份再挂 fileChanges，避免同一个缓存对象
+         * 被两个成员互相改写。
+         */
+        const mine = raw
+          .filter(c => commitBelongsTo(c, identity))
+          .map(c => ({ ...c, fileChanges: undefined }))
+        if (settings.rules.fetchFileChanges && mine.length)
+          await deps.gitlab.attachFileChanges(project.id, mine, signal)
+
+        commits.push(...mine)
       }
       catch (err) {
         // 单个仓库拉取失败（权限、项目被归档）不应该中断整次检查，
@@ -408,7 +446,14 @@ export async function runInspection(
     entry.evidenceStrength = evidenceStrengthOf(entry, commitById)
 
   /* --- 5. 漏报提交 --- */
-  const orphanCommits = usableCommits.filter(c => !usedCommitIds.has(c.id))
+  /*
+   * 结果里只需要文件路径和统计；diff 正文可能每个文件 20k，
+   * 几条漏报就能让历史 JSON 和页面响应体膨胀到几十兆。
+   * 判定阶段已经用过正文，这里剥掉再返回。
+   */
+  const orphanCommits = usableCommits
+    .filter(c => !usedCommitIds.has(c.id))
+    .map(leanCommit)
 
   /*
    * 仓库 → 日报项目名。一个业务项目可能关联多个仓库（或整个分组），

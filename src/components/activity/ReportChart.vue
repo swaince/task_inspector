@@ -144,7 +144,8 @@ const yTicks = computed(() =>
 
 const W = 720
 const H = 230
-const PAD = { top: 16, right: 18, bottom: 30, left: 46 }
+/* 底部留够空间：中文全日期（2026年10月21日）要斜着放，横排会互相压住 */
+const PAD = { top: 16, right: 18, bottom: 42, left: 46 }
 const plotW = W - PAD.left - PAD.right
 const plotH = H - PAD.top - PAD.bottom
 
@@ -188,7 +189,11 @@ function areaPath(data: number[]) {
   return `${linePath(data)} L ${xCenter(data.length - 1).toFixed(1)} ${baseline} L ${xCenter(0).toFixed(1)} ${baseline} Z`
 }
 
-const tickEvery = computed(() => Math.max(1, Math.ceil(pointCount.value / 10)))
+/** 全日期标签比「10-21」宽一倍多，刻度就得少一半，否则斜排也会叠在一起 */
+const longLabels = computed(() => labels.value.some(label => label.length > 6))
+const tickEvery = computed(() =>
+  Math.max(1, Math.ceil(pointCount.value / (longLabels.value ? 6 : 10))),
+)
 
 function showLabel(i: number) {
   return i % tickEvery.value === 0 || i === pointCount.value - 1
@@ -493,8 +498,9 @@ function isEmptyPoint(i: number) {
             :key="`x-${i}`"
             v-show="showLabel(i - 1)"
             :x="xCenter(i - 1)"
-            :y="H - 10"
-            text-anchor="middle"
+            :y="longLabels ? H - 32 : H - 10"
+            :text-anchor="longLabels ? 'end' : 'middle'"
+            :transform="longLabels ? `rotate(-32 ${xCenter(i - 1)} ${H - 32})` : undefined"
             font-size="9"
             fill="currentColor"
             fill-opacity="0.55"

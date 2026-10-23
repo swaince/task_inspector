@@ -44,6 +44,11 @@ const { extensions } = useMarkdownExtensions()
       props.class,
     )"
   >
-    <Markdown :content="md" :extensions="extensions" />
+    <!--
+      实时推理文本会高频追加；streaming 模式会再挂一个常驻加载动画并做增量解析，
+      检查一次要处理几十条，主线程很容易被拖住。这里按普通文本渲染，
+      Reasoning 自己的 is-streaming 已经负责表达「还在生成」。
+    -->
+    <Markdown :content="md" :extensions="extensions" mode="static" />
   </CollapsibleContent>
 </template>

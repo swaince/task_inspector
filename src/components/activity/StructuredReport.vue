@@ -27,9 +27,11 @@ type Segment =
 
 /*
  * 支持 3 个以上反引号或波浪线围栏（模型有时用四个反引号包代码），
- * 结束围栏必须与开始等长。
+ * 结束围栏必须与开始等长。末尾的 `|$` 允许没有闭合围栏的报告：
+ * 模型偶尔会在 chart 代码块中途截断，Markdown 会把它当代码块显示，
+ * 这里至少要把已拿到的 JSON 识别成图表，或者显示一张「数据不合法」的提示。
  */
-const FENCE = /(^|\n)([ \t]*)(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)\n?[ \t]*\3[ \t]*(?=\n|$)/g
+const FENCE = /(^|\n)([ \t]*)(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)(?:\n?[ \t]*\3[ \t]*(?=\n|$)|$)/g
 
 function looksLikeChart(raw: string): Record<string, unknown> | null {
   try {
@@ -45,7 +47,9 @@ function looksLikeChart(raw: string): Record<string, unknown> | null {
 }
 
 const segments = computed<Segment[]>(() => {
-  const text = props.content ?? ''
+  // 模型或 API 可能返回 CRLF；FENCE 用 \n 匹配，先统一换行，
+  // 否则整个 chart 围栏会漏过解析，被当成普通 markdown 代码块显示。
+  const text = (props.content ?? '').replace(/\r\n?/g, '\n')
   const out: Segment[] = []
   let last = 0
 

@@ -489,8 +489,8 @@ fn run_install(kind: &str, root: &Path, channel: &Channel<InstallEvent>) -> Resu
                 return Err("venv 创建失败，没找到 pip".into());
             }
             let pip_str = pip.to_string_lossy().into_owned();
-            emit(channel, format!("$ {pip_str} install graphifyy"));
-            run_step(&pip_str, &["install", "graphifyy"], kind, channel)?;
+            emit(channel, format!("$ {pip_str} install graphifyy[mcp]"));
+            run_step(&pip_str, &["install", "graphifyy[mcp]"], kind, channel)?;
 
             let bin = if cfg!(windows) {
                 venv.join("Scripts").join("graphify.exe")

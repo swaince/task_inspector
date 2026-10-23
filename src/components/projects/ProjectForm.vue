@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { Project, ProjectLink } from '@/core/domain/types'
 import { computed, ref, watch } from 'vue'
-import { AlertTriangleIcon, Loader2Icon, Trash2Icon } from '@lucide/vue'
+import { AlertTriangleIcon, Loader2Icon, SearchIcon, Trash2Icon } from '@lucide/vue'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,9 +16,11 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import ProjectLinkPicker from '@/components/projects/ProjectLinkPicker.vue'
 import { GitLabClient } from '@/core/adapters/gitlab'
 import { resolveProjectLinks } from '@/core/adapters/projectLinks'
 import { useSettingsStore } from '@/core/store/settings'
+import { formatDateTime } from '@/lib/format'
 
 /**
  * 项目编辑表单。
@@ -77,6 +80,20 @@ void emailText
 const settingsStore = useSettingsStore()
 const resolving = ref(false)
 const failures = ref<string[]>([])
+const pickerOpen = ref(false)
+
+/** 打开选择器时默认用项目编码搜索；没有编码再退回名称 */
+const searchKeyword = computed(() => draft.value.code?.trim() || draft.value.name.trim())
+const fallbackKeyword = computed(() => draft.value.name.trim() || draft.value.code?.trim() || '')
+const pickerHint = computed(() => {
+  const code = draft.value.code?.trim()
+  if (code)
+    return `默认按项目编码「${code}」搜索；仓库名、组名和路径会一起模糊匹配。`
+  const name = draft.value.name.trim()
+  return name
+    ? `默认按项目名称「${name}」搜索；仓库名、组名和路径会一起模糊匹配。`
+    : '输入仓库名、组名、项目编码或路径，仓库和组会一起匹配。'
+})
 
 const syncLabel = computed(() => ({
   synced: '已解析',
@@ -91,16 +108,21 @@ const originLabel = computed(() => ({
   manual: '手工创建',
 }[draft.value.origin] ?? '手工创建'))
 
-function addLink() {
-  patch({ links: [...draft.value.links, { kind: 'repo', path: '' }] })
+function addLink(link: ProjectLink) {
+  const path = link.path.trim().replace(/^\/+|\/+$/g, '')
+  if (!path)
+    return
+  const exists = draft.value.links.some(existing =>
+    existing.kind === link.kind
+    && existing.path.trim().replace(/^\/+|\/+$/g, '').toLowerCase() === path.toLowerCase(),
+  )
+  if (exists)
+    return
+  patch({ links: [...draft.value.links, { kind: link.kind, path }] })
 }
 
 function removeLink(index: number) {
   patch({ links: draft.value.links.filter((_, i) => i !== index) })
-}
-
-function updateLink(index: number, part: Partial<ProjectLink>) {
-  patch({ links: draft.value.links.map((link, i) => (i === index ? { ...link, ...part } : link)) })
 }
 
 /**
@@ -281,33 +303,35 @@ async function resolve() {
         组会扫描该组下的全部子组。解析结果会缓存下来，检查时直接用。
       </p>
 
-      <div v-for="(link, i) in draft.links" :key="i" class="flex items-center gap-1.5">
-        <Select
-          :model-value="link.kind"
-          @update:model-value="v => updateLink(i, { kind: v as ProjectLink['kind'] })"
+      <div v-if="draft.links.length" class="space-y-1.5">
+        <div
+          v-for="(link, i) in draft.links"
+          :key="`${link.kind}:${link.path}`"
+          class="flex items-center gap-2 rounded-md border px-2.5 py-1.5"
         >
-          <SelectTrigger class="w-24 shrink-0">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="repo">仓库</SelectItem>
-            <SelectItem value="group">组</SelectItem>
-          </SelectContent>
-        </Select>
-        <Input
-          :model-value="link.path"
-          :placeholder="link.kind === 'group' ? 'rd-platform' : 'rd-platform/payment-gateway'"
-          class="font-mono text-xs"
-          @update:model-value="v => updateLink(i, { path: String(v) })"
-        />
-        <Button variant="ghost" size="sm" class="shrink-0" @click="removeLink(i)">
-          <Trash2Icon :size="13" />
-        </Button>
+          <Badge variant="outline" class="shrink-0 text-[10px]">
+            {{ link.kind === 'group' ? '组' : '仓库' }}
+          </Badge>
+          <span class="min-w-0 flex-1 truncate font-mono text-xs">{{ link.path }}</span>
+          <Button variant="ghost" size="sm" class="shrink-0 px-1.5" @click="removeLink(i)">
+            <Trash2Icon :size="13" />
+          </Button>
+        </div>
       </div>
 
-      <Button variant="outline" size="sm" class="text-xs" @click="addLink">
-        + 添加仓库或组
+      <p v-else class="text-[11px] text-muted-foreground">
+        还没有关联仓库或组。检查时这个项目会被判成「无法核对」。
+      </p>
+
+      <Button variant="outline" size="sm" class="text-xs" @click="pickerOpen = true">
+        <SearchIcon :size="12" class="mr-1" />
+        搜索并添加仓库/组
       </Button>
+
+      <p class="text-[11px] text-muted-foreground">
+        一个输入同时匹配仓库名、组名、项目编码和完整路径；结果里用徽标区分仓库和组。
+        GitLab 里找不到时，可以在选择器底部手动填写路径。
+      </p>
 
       <Alert v-if="failures.length" variant="destructive">
         <AlertTriangleIcon :size="14" />
@@ -343,8 +367,17 @@ async function resolve() {
 
       <p class="text-[11px] text-muted-foreground">
         {{ originLabel }}
-        <template v-if="draft.syncedAt">，最后解析 {{ draft.syncedAt.slice(0, 16).replace('T', ' ') }}</template>
+        <template v-if="draft.syncedAt">，最后解析 {{ formatDateTime(draft.syncedAt) }}</template>
       </p>
     </section>
+
+    <ProjectLinkPicker
+      v-model:open="pickerOpen"
+      :default-query="searchKeyword"
+      :fallback-query="fallbackKeyword"
+      :hint="pickerHint"
+      :existing="draft.links"
+      @select="addLink"
+    />
   </div>
 </template>

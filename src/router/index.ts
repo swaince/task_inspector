@@ -29,6 +29,15 @@ const router = createRouter({
       meta: { title: '检查历史', description: '按日期回看已经保存的检查结论' },
     },
     {
+      path: '/assistant',
+      name: 'assistant',
+      component: () => import('@/views/AssistantView.vue'),
+      meta: {
+        title: '应用助手',
+        description: '查官方文档、问功能与数据口径，或在确认后维护人员与项目关联',
+      },
+    },
+    {
       path: '/result/:date/:memberId',
       name: 'result',
       component: () => import('@/views/ResultView.vue'),

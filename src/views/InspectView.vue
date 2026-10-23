@@ -31,7 +31,7 @@ import { useMemberStore } from '@/core/store/members'
 import { dateRange } from '@/core/engine/window'
 import { useWorkCalendar } from '@/core/calendar/useWorkCalendar'
 import { followUpVerdicts, scoreTone } from '@/core/domain/verdict'
-import { dateKeyOffset } from '@/lib/format'
+import { dateKeyOffset, formatDateCN } from '@/lib/format'
 
 const settingsStore = useSettingsStore()
 const reportStore = useReportStore()
@@ -72,8 +72,8 @@ const sourceLabel = computed(() => {
   return '演示数据'
 })
 
-/** 检查一次会逐天 × 逐人调用模型，范围放太大既慢又费钱 */
-const MAX_RANGE_DAYS = 31
+/** 检查一次会逐天 × 逐人调用模型，范围放太大既慢又费钱；用户要求放宽到 60 天 */
+const MAX_RANGE_DAYS = 60
 
 const canRun = computed(() =>
   !runner.running
@@ -210,13 +210,13 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
       <Card class="gap-0 py-4">
         <CardContent class="space-y-3 px-4">
           <div class="flex flex-wrap items-end gap-3">
-            <div class="space-y-1.5">
+            <div class="min-w-44 flex-1 space-y-1.5">
               <Label class="text-xs">起始日期</Label>
-              <DatePicker v-model="from" class="w-40" />
+              <DatePicker v-model="from" />
             </div>
-            <div class="space-y-1.5">
+            <div class="min-w-44 flex-1 space-y-1.5">
               <Label class="text-xs">结束日期</Label>
-              <DatePicker v-model="to" class="w-40" />
+              <DatePicker v-model="to" />
             </div>
 
             <Button variant="outline" @click="applyDefaultRange">
@@ -381,7 +381,7 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
         <AlertTitle>{{ runner.failures.length }} 条检查失败</AlertTitle>
         <AlertDescription>
           <div v-for="f in runner.failures.slice(0, 5)" :key="`${f.date}-${f.memberId}`" class="text-xs">
-            {{ f.date ? `${f.date} ` : '' }}{{ f.memberName }}：{{ f.message }}
+            {{ f.date ? `${formatDateCN(f.date)} ` : '' }}{{ f.memberName }}：{{ f.message }}
           </div>
         </AlertDescription>
       </Alert>
@@ -410,7 +410,7 @@ const resultDays = computed(() => new Set(runner.results.map(r => r.date)).size)
             @click="toggleExpand(result.id)"
           >
             <Badge variant="outline" class="shrink-0 font-mono text-[10px]">
-              {{ result.date.slice(5) }}
+              {{ formatDateCN(result.date) }}
             </Badge>
             <span class="text-sm font-medium">{{ result.memberName }}</span>
 

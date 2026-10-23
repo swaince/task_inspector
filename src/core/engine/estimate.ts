@@ -1,5 +1,6 @@
 import type { GitCommit } from '../domain/types'
 import type { LlmClient } from '../llm/client'
+import { formatDateCN } from '@/lib/format'
 
 /**
  * 工时占比估算。
@@ -87,7 +88,7 @@ export function buildEstimatePrompt(
   const total = projects.reduce((s, p) => s + p.commits.length, 0)
   const lines: string[] = []
   lines.push(`员工：${memberName}`)
-  lines.push(`日期：${date}`)
+  lines.push(`日期：${formatDateCN(date)}`)
   lines.push(`当天共 ${total} 条提交，分布在 ${projects.length} 个项目。`)
   lines.push('')
 

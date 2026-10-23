@@ -1,5 +1,6 @@
 import type { DailyReportEntry, GitCommit, InspectionResult } from '../domain/types'
 import type { RuleSettings } from '../config/settings'
+import { formatDateCN, formatDateTime } from '@/lib/format'
 import { isCoreWindow } from './window'
 
 /**
@@ -36,7 +37,8 @@ export const JUDGE_SYSTEM = `你是研发工作内容稽核助手，负责核对
   "nonCodingWork": true/false，该描述是否属于本就不产出代码的工作,
   "evidence": [{"commitId": "完整 commit id", "relevance": "该提交与描述的关联点，一句话"}],
   "suggestions": ["可选，若日报描述与实际不符，给出更贴合的写法"]
-}`
+}
+提到的日期一律写成完整中文日期（例如「2026年10月21日」），不要写成「10-21」「10月21日」或 ISO 日期。`
 
 export const SUMMARY_SYSTEM = `你是研发效能分析师。根据逐条核对结果，写一段给研发管理者看的当日结论。
 
@@ -46,7 +48,8 @@ export const SUMMARY_SYSTEM = `你是研发效能分析师。根据逐条核对�
 - 如果存在「有提交但日报没写」的情况，必须指出。
 - 不要给出人事评价或绩效结论，只陈述事实与需要跟进的点。
 - 如果数据里给了「预估有效工时 / 工作饱和度」，可以引用，但要注明它只统计代码产出，不能当作考勤或绩效结论。
-- 输出纯文本，不要 markdown 标题和列表。`
+- 输出纯文本，不要 markdown 标题和列表。
+- 日期写成完整中文日期（例如「2026年10月21日」），不要写成「10-21」或 ISO 日期。`
 
 /* ------------------------------------------------------------------ *
  * 非编码工作的关键词兜底
@@ -149,7 +152,7 @@ function codeExcerpt(commit: GitCommit): string | null {
 
 function formatCommit(commit: GitCommit, index: number, ctx: JudgeContext): string {
   const lines: string[] = []
-  const time = commit.authoredDate.replace('T', ' ').slice(0, 16)
+  const time = formatDateTime(commit.authoredDate)
   const stat = commit.stats ? ` +${commit.stats.additions}/-${commit.stats.deletions}` : ''
   const outside = isCoreWindow(commit.authoredDate, ctx.date, ctx.rules) ? '' : ' [当日核心时段之外]'
   lines.push(`[${index + 1}] ${commit.id}  ${time}${stat}${outside}`)
@@ -177,12 +180,15 @@ function formatCommit(commit: GitCommit, index: number, ctx: JudgeContext): stri
   return lines.join('\n')
 }
 
+/** 单次判定最多把多少条提交放进提示词；超出的只保留最近的一批，避免提示词膨胀 */
+const MAX_PROMPT_COMMITS = 40
+
 export function buildJudgePrompt(entry: DailyReportEntry, ctx: JudgeContext): string {
   const hint = detectNonCoding(entry.content)
   const parts: string[] = []
 
   parts.push(`员工：${ctx.memberName}`)
-  parts.push(`日报日期：${ctx.date}`)
+  parts.push(`日报日期：${formatDateCN(ctx.date)}`)
   parts.push('')
   parts.push('待核对的日报条目：')
   parts.push(`  项目：${entry.projectName}`)
@@ -199,9 +205,13 @@ export function buildJudgePrompt(entry: DailyReportEntry, ctx: JudgeContext): st
   parts.push('')
 
   if (ctx.commits.length) {
-    parts.push(`当天在${ctx.gitlabProjects.length ? '该项目' : '已关联仓库'}的提交记录（共 ${ctx.commits.length} 条）：`)
+    const shown = ctx.commits.slice(0, MAX_PROMPT_COMMITS)
+    const more = ctx.commits.length > shown.length
+      ? `；以下只展示最近 ${shown.length} 条`
+      : ''
+    parts.push(`当天在${ctx.gitlabProjects.length ? '该项目' : '已关联仓库'}的提交记录（共 ${ctx.commits.length} 条${more}）：`)
     parts.push('')
-    parts.push(ctx.commits.map((c, i) => formatCommit(c, i, ctx)).join(''))
+    parts.push(shown.map((c, i) => formatCommit(c, i, ctx)).join(''))
   }
   else {
     parts.push('当天该项目没有任何提交记录。')
@@ -243,7 +253,7 @@ export function buildSummaryPrompt(
 ): string {
   const lines: string[] = []
   lines.push(`员工：${memberName}`)
-  lines.push(`日期：${date}`)
+  lines.push(`日期：${formatDateCN(date)}`)
   lines.push(`加权符合度：${summary.score.toFixed(1)} / 100（日报工时合计 ${summary.totalHours} 小时）`)
   if (summary.effectiveHigh) {
     lines.push(
@@ -262,9 +272,12 @@ export function buildSummaryPrompt(
 
   lines.push('')
   if (orphans.length) {
+    const shown = orphans.slice(0, MAX_PROMPT_COMMITS)
     lines.push('有提交但没有任何日报条目引用：')
-    for (const o of orphans)
-      lines.push(`- ${o.projectPath} @ ${o.authoredDate.slice(0, 16).replace('T', ' ')}：${truncate(o.title, 100)}`)
+    for (const o of shown)
+      lines.push(`- ${o.projectPath} @ ${formatDateTime(o.authoredDate)}：${truncate(o.title, 100)}`)
+    if (orphans.length > shown.length)
+      lines.push(`- ……另有 ${orphans.length - shown.length} 条，省略`)
   }
   else {
     lines.push('不存在未被任何日报条目引用的提交。')

@@ -44,6 +44,21 @@ interface RawGitLabProject {
   namespace?: { full_path?: string }
 }
 
+interface RawGitLabGroup {
+  id: number
+  name: string
+  full_path: string
+  web_url?: string
+}
+
+/** 项目关联选择器用的组结果 */
+export interface GitLabGroupRef {
+  id: number
+  name: string
+  fullPath: string
+  webUrl?: string
+}
+
 interface RawGitLabDiff {
   old_path: string
   new_path: string
@@ -182,6 +197,27 @@ export class GitLabClient {
   }
 
   /**
+   * 按名称/路径搜索组。项目关联选择器用它把「手动输入 group/subgroup」变成可筛选的选择。
+   *
+   * GitLab 的 groups 接口支持 search；结果只包含当前 token 能看到的组，
+   * 与项目搜索的权限边界一致。
+   */
+  async searchGroups(search: string, limit = 30): Promise<GitLabGroupRef[]> {
+    const raw = await this.get<RawGitLabGroup[]>('/groups', {
+      search,
+      order_by: 'name',
+      sort: 'asc',
+      per_page: limit,
+    })
+    return raw.map(group => ({
+      id: group.id,
+      name: group.name,
+      fullPath: group.full_path,
+      webUrl: group.web_url,
+    }))
+  }
+
+  /**
    * 同步 token 有权限的全部仓库，这是仓库目录的默认来源。
    *
    * `membership=true` 取的是「当前用户是其成员」的项目——包含通过 group 继承的成员身份。
@@ -257,6 +293,25 @@ export class GitLabClient {
   async getProject(pathWithNamespace: string): Promise<GitLabProjectRef> {
     const raw = await this.get<RawGitLabProject>(`/projects/${encodeURIComponent(pathWithNamespace)}`)
     return this.toProjectRef(raw)
+  }
+
+  /**
+   * 按完整路径取组。用于确认「这个组真的存在」，
+   * 避免把拼错的路径写进项目关联后，检查时整组提交凭空消失。
+   */
+  async getGroup(path: string): Promise<{ id: number, fullPath: string, name: string, webUrl?: string }> {
+    const raw = await this.get<{
+      id: number
+      full_path: string
+      name: string
+      web_url?: string
+    }>(`/groups/${encodeURIComponent(path)}`)
+    return {
+      id: raw.id,
+      fullPath: raw.full_path,
+      name: raw.name,
+      webUrl: raw.web_url,
+    }
   }
 
   /**
@@ -340,8 +395,13 @@ export class GitLabClient {
     return trimmed
   }
 
-  /** 并发拉取各提交的变更文件列表，单个失败不影响其它提交。 */
-  private async attachFileChanges(projectId: number, commits: GitCommit[], signal?: AbortSignal) {
+  /**
+   * 给一批提交补上变更文件。
+   *
+   * 检查引擎先只拉提交列表、按作者筛出本人的提交，再调用这里补 diff；
+   * 不再给整个项目当天所有人的提交都拉一遍 diff。
+   */
+  async attachFileChanges(projectId: number, commits: GitCommit[], signal?: AbortSignal) {
     const limit = 6
     let cursor = 0
 
