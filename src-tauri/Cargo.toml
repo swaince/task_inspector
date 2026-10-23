@@ -1,6 +1,6 @@
 [package]
 name = "task-inspector"
-version = "0.1.0"
+version = "0.2.0"
 description = "研发工作核查：核对日报申报内容与 GitLab 实际提交是否一致"
 authors = ["task-inspector"]
 license = ""
