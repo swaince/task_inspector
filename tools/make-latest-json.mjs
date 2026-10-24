@@ -40,17 +40,33 @@ function walk(current, out = []) {
 }
 
 const files = walk(dir)
-const findUpdater = (suffix) => {
+const findUpdater = (label, suffix) => {
   const candidates = files.filter(f => f.endsWith(suffix) && !f.endsWith('.sig'))
   if (candidates.length !== 1) {
-    console.error(`在 ${dir} 里应当恰好有一个 ${suffix}，实际找到 ${candidates.length} 个：${candidates.join(', ')}`)
+    console.error(`在 ${dir} 里应当恰好有一个 ${label}，实际找到 ${candidates.length} 个：${candidates.join(', ')}`)
     process.exit(1)
   }
   return candidates[0]
 }
 
-const windows = findUpdater('.nsis.zip')
-const macos = findUpdater('.app.tar.gz')
+/*
+ * Tauri v2 默认把 NSIS 安装包本身当作更新包（*-setup.exe + .exe.sig）；
+ * 只有 createUpdaterArtifacts: 'v1Compatible' 才产出 .nsis.zip。
+ * 两种布局都接受，避免升级 Tauri 后发布脚本静默失配。
+ */
+const nsisZips = files.filter(f => f.endsWith('.nsis.zip') && !f.endsWith('.sig'))
+let windows
+if (nsisZips.length === 1) {
+  windows = nsisZips[0]
+}
+else if (nsisZips.length > 1) {
+  console.error(`在 ${dir} 里应当恰好有一个 .nsis.zip，实际找到 ${nsisZips.length} 个：${nsisZips.join(', ')}`)
+  process.exit(1)
+}
+else {
+  windows = findUpdater('NSIS 安装包（*-setup.exe）', '-setup.exe')
+}
+const macos = findUpdater('macOS 更新包（*.app.tar.gz）', '.app.tar.gz')
 
 const signatureOf = (file) => {
   const sig = readFileSync(join(dir, `${file}.sig`), 'utf8').trim()
