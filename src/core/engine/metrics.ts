@@ -292,8 +292,20 @@ export function groupedDayMetrics(
 ): DayMetrics {
   const workload = opts.workload ?? DEFAULT_WORKLOAD
   const signals = opts.signals ?? []
-  if (!commits.length && !signals.length)
-    return emptyMetrics('manual', workload)
+  if (!commits.length && !signals.length) {
+    const empty = emptyMetrics('manual', workload)
+    /*
+     * 只有日报、没有提交/活动的日子：确定性证据为 0，但模型仍可能
+     * 根据申报内容给出一个上限。不显示下限，只把上限带出去。
+     */
+    const llmHigh = Math.max(0, opts.llm?.high ?? 0)
+    if (llmHigh > 0) {
+      empty.effectiveHigh = round1(clamp(llmHigh, 0, workload.maxHours))
+      empty.effectiveMid = round1(empty.effectiveHigh / 2)
+      empty.basis = `没有提交或活动证据；仅模型按日报内容估算上限 ${empty.effectiveHigh}h`
+    }
+    return empty
+  }
 
   const commitGroups = new Map<string, GitCommit[]>()
   for (const commit of commits) {

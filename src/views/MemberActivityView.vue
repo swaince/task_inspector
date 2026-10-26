@@ -41,7 +41,7 @@ import { useMemberStore } from '@/core/store/members'
 import { useProjectStore } from '@/core/store/projects'
 import { useReportStore } from '@/core/store/reports'
 import { useSettingsStore } from '@/core/store/settings'
-import { dateKeyOffset, formatDateCN, formatDateTime } from '@/lib/format'
+import { dateKeyOffset, formatDateCN, formatDateTime, formatEffortRange } from '@/lib/format'
 
 /**
  * 人员活动：某个人在一段时间里，在各项目上的产出与申报构成。
@@ -70,7 +70,7 @@ const DAY_LEGEND = [
   { label: '提交', desc: '当天本人名下所有项目的提交条数，按配置的多个 Git 身份归集' },
   { label: '代码量', desc: '当天累计 +新增 / -删除行数，来自 GitLab 提交统计' },
   { label: '活跃时段', desc: '有提交的 30 分钟时段数，反映当天敲代码的密度' },
-  { label: '有效工时', desc: '可观测证据推算的区间：下限只认提交（含首尾缓冲），上限叠加 MR/评审/Issue 活动、在岗跨度和模型任务估算；不是考勤' },
+  { label: '有效工时', desc: '区间显示为「代码可核对下限 – 有效上限」。下限只认提交会话（含首尾缓冲），是能落到提交上的证据；上限叠加 MR/评审/Issue 活动、在岗跨度和模型任务估算，是能解释得通的最大值。左边不是模型估算，右边才是综合判断' },
   { label: '申报工时', desc: '当天日报申报的总工时，所有项目合计' },
 ]
 
@@ -1007,7 +1007,8 @@ async function generateReport() {
         <div class="flex flex-wrap items-center gap-4 text-[11px] text-muted-foreground">
           <span>提交 {{ totalCommits }} 条</span>
           <span>申报工时 {{ totalReported }}h</span>
-          <span>有效工时 {{ totalEffective.low }}–{{ totalEffective.high }}h</span>
+          <span>代码可核对 {{ totalEffective.low }}h</span>
+          <span>有效上限 {{ totalEffective.high }}h</span>
           <span v-if="evidenceCoverage !== null" title="证据上限 / 申报工时；只作参照，会议等无痕迹工作无法覆盖">
             证据覆盖申报 {{ evidenceCoverage }}%
           </span>
@@ -1065,7 +1066,10 @@ async function generateReport() {
                   <TableHead class="w-20 text-right">提交</TableHead>
                   <TableHead class="w-32 text-right">代码量</TableHead>
                   <TableHead class="w-24 text-right">活跃时段</TableHead>
-                  <TableHead class="w-28 text-right">有效工时</TableHead>
+                  <TableHead class="w-32 text-right">
+                    有效工时
+                    <span class="block text-[9px] font-normal text-muted-foreground">可核对 – 上限</span>
+                  </TableHead>
                   <TableHead class="w-24 text-right">申报工时</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1094,10 +1098,14 @@ async function generateReport() {
                   </TableCell>
                   <TableCell class="text-right text-xs tabular-nums">
                     <span
-                      :title="llmEffort.get(day.date)
-                        ? `模型任务估算 ${llmEffort.get(day.date)!.low}–${llmEffort.get(day.date)!.high}h：${llmEffort.get(day.date)!.reason || '无说明'}`
-                        : '仅按提交/活动证据推算，没有模型估算'"
-                    >{{ day.effectiveHigh ? `${day.effectiveLow}–${day.effectiveHigh}h` : '—' }}</span>
+                      :title="[
+                        `代码可核对下限 ${day.effectiveLow}h（只认提交）`,
+                        `有效上限 ${day.effectiveHigh}h（含活动事件、在岗跨度和模型估算）`,
+                        llmEffort.get(day.date)
+                          ? `模型任务估算 ${llmEffort.get(day.date)!.low}–${llmEffort.get(day.date)!.high}h（只用于抬高上限）：${llmEffort.get(day.date)!.reason || '无说明'}`
+                          : '没有模型估算',
+                      ].join('；')"
+                    >{{ formatEffortRange(day.effectiveLow, day.effectiveHigh) }}</span>
                     <span
                       v-if="llmEffort.get(day.date)"
                       class="ml-1 rounded bg-muted px-1 text-[9px] text-muted-foreground"

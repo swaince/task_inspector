@@ -33,7 +33,7 @@ import { useMemberStore } from '@/core/store/members'
 import { useProjectStore } from '@/core/store/projects'
 import { useReportStore } from '@/core/store/reports'
 import { useSettingsStore } from '@/core/store/settings'
-import { dateKeyOffset, formatDateCN, formatDateTime } from '@/lib/format'
+import { dateKeyOffset, formatDateCN, formatDateTime, formatEffortRange } from '@/lib/format'
 
 /**
  * 项目活动：某个项目在一段时间里，谁提交了什么、谁在日报里报了什么。
@@ -64,7 +64,7 @@ const DAY_LEGEND = [
   { label: '代码量', desc: '+新增 / -删除行数，来自 GitLab 提交统计，生成文件与格式化也会计入' },
   { label: '申报工时', desc: '当天日报里写到这个项目的工时合计，同一人多条会相加' },
   { label: '活跃时段', desc: '有提交的 30 分钟时段数之和，按人分别计算再相加' },
-  { label: '有效工时', desc: '按人按天推算后求和：每人的下限只认提交（含首尾缓冲），上限叠加 MR/评审/Issue 活动、在岗跨度和模型任务估算；单日上限是每人每天，多人合计会超过 10h' },
+  { label: '有效工时', desc: '区间显示为「代码可核对下限 – 有效上限」。下限只认提交（含首尾缓冲），上限叠加 MR/评审/Issue 活动、在岗跨度和模型任务估算；单日上限是每人每天，多人合计会超过 10h' },
   { label: '有提交未申报', desc: '当天有提交或活动、但日报没有提到这个项目的人数' },
 ]
 
@@ -74,7 +74,7 @@ const PERSON_LEGEND = [
   { label: '活跃天数', desc: '区间内有提交的天数，不是提交条数' },
   { label: '代码量', desc: '区间内累计 +新增 / -删除行数' },
   { label: '申报工时', desc: '区间内这个人在日报里为该项目申报的工时合计' },
-  { label: '有效工时', desc: '同一套证据推算口径：下限只认提交，上限叠加活动事件、在岗跨度和模型任务估算' },
+  { label: '有效工时', desc: '同一套证据推算口径：左侧为代码可核对下限（只认提交），右侧为有效上限（叠加活动事件、在岗跨度和模型任务估算）' },
   { label: '有提交未申报', desc: '有提交、但当天日报没写这个项目的天数' },
   { label: '最近提交', desc: '区间内最后一次提交的作者时间' },
 ]
@@ -942,7 +942,8 @@ function fmtTime(iso: string) {
       </div>
 
       <div v-if="rows.length" class="flex flex-wrap items-center gap-4 text-[11px] text-muted-foreground">
-        <span>有效工时 {{ totalEffective.low }}–{{ totalEffective.high }}h</span>
+        <span>代码可核对 {{ totalEffective.low }}h</span>
+        <span>有效上限 {{ totalEffective.high }}h</span>
         <span>下限只认提交，上限叠加活动事件、在岗跨度和模型任务估算</span>
       </div>
 
@@ -1087,7 +1088,10 @@ function fmtTime(iso: string) {
                   <TableHead class="w-32 text-right">代码量</TableHead>
                   <TableHead class="w-24 text-right">申报工时</TableHead>
                   <TableHead class="w-24 text-right">活跃时段</TableHead>
-                  <TableHead class="w-28 text-right">有效工时</TableHead>
+                  <TableHead class="w-32 text-right">
+                    有效工时
+                    <span class="block text-[9px] font-normal text-muted-foreground">可核对 – 上限</span>
+                  </TableHead>
                   <TableHead class="w-32 text-right">有提交未申报</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1118,7 +1122,9 @@ function fmtTime(iso: string) {
                     {{ day.activeBuckets || '—' }}
                   </TableCell>
                   <TableCell class="text-right text-xs tabular-nums">
-                    <span>{{ day.effectiveHigh ? `${day.effectiveLow}–${day.effectiveHigh}h` : '—' }}</span>
+                    <span
+                      :title="`左侧 ${day.effectiveLow}h 是各人的代码可核对下限（只认提交）；右侧 ${day.effectiveHigh}h 是有效上限（叠加活动事件、在岗跨度和模型估算）`"
+                    >{{ formatEffortRange(day.effectiveLow, day.effectiveHigh) }}</span>
                     <AlertTriangleIcon
                       v-if="day.batchSuspect"
                       :size="11"
@@ -1149,7 +1155,10 @@ function fmtTime(iso: string) {
                   <TableHead class="w-20 text-right">活跃天数</TableHead>
                   <TableHead class="w-32 text-right">代码量</TableHead>
                   <TableHead class="w-24 text-right">申报工时</TableHead>
-                  <TableHead class="w-28 text-right">有效工时</TableHead>
+                  <TableHead class="w-32 text-right">
+                    有效工时
+                    <span class="block text-[9px] font-normal text-muted-foreground">可核对 – 上限</span>
+                  </TableHead>
                   <TableHead class="w-28 text-right">未申报天数</TableHead>
                   <TableHead class="w-32">最近提交</TableHead>
                 </TableRow>
@@ -1171,7 +1180,10 @@ function fmtTime(iso: string) {
                     {{ person.hours ? `${person.hours}h` : '—' }}
                   </TableCell>
                   <TableCell class="text-right text-xs tabular-nums">
-                    <span v-if="person.effectiveHigh">{{ Math.round(person.effectiveLow * 10) / 10 }}–{{ Math.round(person.effectiveHigh * 10) / 10 }}h</span>
+                    <span
+                      v-if="person.effectiveHigh"
+                      :title="`代码可核对下限 ${Math.round(person.effectiveLow * 10) / 10}h（只认提交）；有效上限 ${Math.round(person.effectiveHigh * 10) / 10}h（叠加活动事件、在岗跨度和模型估算）`"
+                    >{{ formatEffortRange(Math.round(person.effectiveLow * 10) / 10, Math.round(person.effectiveHigh * 10) / 10) }}</span>
                     <span v-else class="text-muted-foreground">—</span>
                   </TableCell>
                   <TableCell

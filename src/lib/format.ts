@@ -78,6 +78,15 @@ export function todayKey() {
   return dateKeyOffset(0)
 }
 
+/** 有效工时区间：没有下限时只显示上限，避免出现「0–7h」被误读成零证据 */
+export function formatEffortRange(low: number, high: number) {
+  if (!high)
+    return '—'
+  if (!low)
+    return `≤${high}h`
+  return `${low}–${high}h`
+}
+
 /** 简易 UUID。桌面端与浏览器端都有 crypto.randomUUID，这里只做兜底。 */
 export function uid() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
