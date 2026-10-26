@@ -47,7 +47,7 @@ export const SUMMARY_SYSTEM = `你是研发效能分析师。根据逐条核对�
 - 先给整体判断（当日日报是否能被提交自证），再点出需要关注的具体问题。
 - 如果存在「有提交但日报没写」的情况，必须指出。
 - 不要给出人事评价或绩效结论，只陈述事实与需要跟进的点。
-- 如果数据里给了「预估有效工时 / 工作饱和度」，可以引用，但要注明它只统计代码产出，不能当作考勤或绩效结论。
+- 如果数据里给了「有效工时 / 工作饱和度」，可以引用，但要注明它来自可观测证据推算，不能当作考勤或绩效结论。
 - 输出纯文本，不要 markdown 标题和列表。
 - 日期写成完整中文日期（例如「2026年10月21日」），不要写成「10-21」或 ISO 日期。`
 
@@ -260,7 +260,8 @@ export function buildSummaryPrompt(
   lines.push(`加权符合度：${summary.score.toFixed(1)} / 100（日报工时合计 ${summary.totalHours} 小时）`)
   if (summary.effectiveHigh) {
     lines.push(
-      `代码产出折算：预估有效工时 ${summary.effectiveLow}–${summary.effectiveHigh}h（仅代码产出，不含会议/评审），`
+      `可观测证据推算：有效工时 ${summary.effectiveLow}–${summary.effectiveHigh}h`
+      + `（下限只认提交会话，上限叠加 MR/评审/Issue 活动与在岗跨度），`
       + `工作饱和度约 ${Math.round((summary.saturation ?? 0) * 100)}%`,
     )
   }

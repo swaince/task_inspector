@@ -3,12 +3,12 @@ import type { InspectionSummary } from '@/core/domain/types'
 import { computed } from 'vue'
 
 /**
- * 工时对照：把「申报」「可核对」「代码估算」放在同一条刻度上。
+ * 工时对照：把「申报」「可核对」「证据推算」放在同一条刻度上。
  *
  * 三个数不是同一口径，所以每条都单独标注：
  * - 申报：日报里填的总工时，包含会议等非编码工作；
  * - 可核对：能对上仓库和提交的部分，分数的分母；
- * - 预估：只由提交会话和代码量推算，**不含会议/评审**。
+ * - 证据推算：下限只认提交，上限叠加 MR/评审/Issue、在岗跨度和模型任务估算。
  * 把口径混在一起比，会得出「申报多了」的假结论——差距可能只是会议时间。
  */
 const props = defineProps<{
@@ -67,10 +67,10 @@ const verdict = computed(() => {
   const over = (v.checkedHours ?? 0) - high.value
   const under = low.value - (v.checkedHours ?? 0)
   if (over > 1)
-    return { text: `可核对工时比代码估算高 ${round1(over)}h`, color: 'var(--verdict-partial)' }
+    return { text: `可核对工时比证据上限高 ${round1(over)}h`, color: 'var(--verdict-partial)' }
   if (under > 1)
-    return { text: `可核对工时比代码估算低 ${round1(under)}h`, color: 'var(--verdict-nocommit)' }
-  return { text: '申报与代码估算基本吻合', color: 'var(--verdict-matched)' }
+    return { text: `可核对工时比证据下限低 ${round1(under)}h`, color: 'var(--verdict-nocommit)' }
+  return { text: '申报与可观测证据基本吻合', color: 'var(--verdict-matched)' }
 })
 
 const stats = computed(() => {
@@ -79,6 +79,7 @@ const stats = computed(() => {
     { label: '提交会话', value: `${v.sessions ?? 0}` },
     { label: '活跃时段', value: `${v.activeBuckets ?? 0} 个 / ${round1(v.activeHours ?? 0)}h` },
     { label: '在场跨度', value: `${round1(v.presenceHours ?? 0)}h` },
+    ...(v.signalCount ? [{ label: '活动事件', value: `${v.signalCount} 条` }] : []),
     { label: '饱和度', value: high.value > 0 ? `${Math.round((v.saturation ?? 0) * 100)}%` : '—' },
   ]
   return out
@@ -113,7 +114,7 @@ function round1(n: number) {
       </div>
 
       <div class="flex items-center gap-2.5">
-        <span class="w-16 shrink-0 text-[11px] text-muted-foreground">代码估算</span>
+        <span class="w-16 shrink-0 text-[11px] text-muted-foreground">证据推算</span>
         <div class="relative h-2.5 flex-1 rounded-full bg-muted/70">
           <div
             class="absolute inset-y-0 rounded-full"
@@ -122,7 +123,7 @@ function round1(n: number) {
               width: `${estimate.width}%`,
               backgroundColor: 'color-mix(in oklab, var(--verdict-matched) 70%, transparent)',
             }"
-            :title="`代码估算 ${estimate.text}`"
+            :title="`证据推算 ${estimate.text}`"
           />
         </div>
         <span class="w-14 shrink-0 text-right text-[11px] font-medium tabular-nums">{{ estimate.text }}</span>
@@ -157,8 +158,8 @@ function round1(n: number) {
 
     <p class="text-[11px] leading-relaxed text-muted-foreground">
       申报含会议、评审等全部工作；可核对只算能对上仓库和提交的部分；
-      代码估算只覆盖提交能体现的代码产出，不含会议、评审、设计。
-      三者口径不同，代码估算不参与上面的符合度得分。
+      证据推算的下限只认提交，上限叠加 MR/评审/Issue、在岗跨度和模型任务估算。
+      三者口径不同，证据推算不参与上面的符合度得分。
     </p>
   </div>
 </template>

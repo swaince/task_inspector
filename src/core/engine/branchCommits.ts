@@ -111,7 +111,15 @@ export async function collectBranchCommits(
           merged: branch.merged,
           commits: branchCommits,
           latestCommitAt: branch.committedDate,
-          titles: commits.slice(0, MAX_TITLES).map(commit => commit.title),
+          /*
+           * 合并提交不能代表分支的实质工作；报告里的「提交主题」列
+           * 如果出现「Merge branch 'master' into dev」，等于什么都没说。
+           * 这里只影响展示标题，提交计数仍然包含合并提交。
+           */
+          titles: commits
+            .filter(commit => !/^Merge (branch|remote-tracking branch|pull request)/i.test(commit.title))
+            .slice(0, MAX_TITLES)
+            .map(commit => commit.title),
         })
       }
     }

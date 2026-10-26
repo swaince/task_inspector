@@ -1,5 +1,5 @@
 import type { ActivityFailure, ProjectBranchActivity } from '../engine/activity'
-import type { GitCommit } from '../domain/types'
+import type { GitCommit, WorkSignal } from '../domain/types'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
@@ -16,6 +16,8 @@ export interface ActivityRow {
   memberName: string
   /** 该日该项目下这个人的提交 */
   commits: GitCommit[]
+  /** 同一天的 MR / 评审 / Issue 活动 */
+  signals?: WorkSignal[]
   /** 日报里有没有这条项目 */
   reported: boolean
   hours: number
@@ -33,6 +35,13 @@ export interface ActivitySnapshot {
   rows: ActivityRow[]
   /** 区间内有提交的分支活动 */
   branches: ProjectBranchActivity[]
+  /** 模型任务估算；恢复页面时和 rows 一起还原 */
+  effort?: {
+    /** key = memberKey|date */
+    byMemberDate: Record<string, { low: number, high: number }>
+    note: string | null
+    confidence: number | null
+  }
   failures: ActivityFailure[]
   scannedAt: string
   /** 实时拉日报失败的原因；非空时申报列来自本地缓存 */

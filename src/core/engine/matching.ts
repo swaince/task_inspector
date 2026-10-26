@@ -1,4 +1,4 @@
-import type { GitCommit, GitLabProjectRef, MemberIdentityInput, MemberProfile, Project } from '../domain/types'
+import type { GitCommit, GitLabProjectRef, MemberIdentityInput, MemberProfile, Project, WorkSignal } from '../domain/types'
 
 /**
  * 把日报里的项目名/人名对应到 GitLab 上的项目和身份。
@@ -370,6 +370,25 @@ export function commitBelongsTo(commit: GitCommit, identity: MemberIdentity): bo
       return true
   }
   return false
+}
+
+/**
+ * 活动事件是否属于该成员。
+ *
+ * GitLab 事件只带 username / name，没有邮箱；所以优先按用户名精确匹配。
+ * 没配用户名时才退回姓名——姓名重名很常见，不能反过来优先。
+ */
+export function signalBelongsTo(signal: WorkSignal, identity: MemberIdentity): boolean {
+  const username = signal.username?.trim().toLowerCase()
+  if (username) {
+    return identity.gitlabUsernames.some(u => u.trim().toLowerCase() === username)
+  }
+
+  if (identity.gitlabUsernames.length)
+    return false
+
+  const name = signal.authorName?.trim().toLowerCase()
+  return Boolean(name && name === identity.memberName.trim().toLowerCase())
 }
 
 /** 用户名去重（忽略大小写），保留第一次出现的写法 */

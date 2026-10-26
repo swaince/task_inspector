@@ -90,6 +90,7 @@ pub fn run() {
             analysis::clear_cache,
             analysis::analysis_install,
             analysis::analysis_install_cancel,
+            analysis::analysis_index,
             analysis::scan_repo,
             analysis::git_hotspots,
             analysis::git_head,

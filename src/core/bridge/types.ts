@@ -236,6 +236,15 @@ export interface ClearResult {
   removedEntries: number
 }
 
+/** codegraph 索引结果 */
+export interface IndexResult {
+  path: string
+  /** init = 首次建索引；sync = 增量更新 */
+  action: string
+  database: string
+  output: string
+}
+
 /** 安装进度：最后一条 done=true */
 export interface InstallEvent {
   line?: string
@@ -320,6 +329,8 @@ export interface Transport extends DataStore {
   /** 后台安装分析工具，进度通过回调推送；命令立即返回 */
   installTool(kind: 'codegraph' | 'graphify', onEvent: (event: InstallEvent) => void): Promise<void>
   cancelInstall(kind: 'codegraph' | 'graphify'): Promise<void>
+  /** 确保本地仓库有 codegraph 索引（已有则增量 sync，没有则 init） */
+  analysisIndex(path: string, configuredPath?: string): Promise<IndexResult>
   /** 扫描本地仓库的文件清单（桌面端） */
   scanRepo(path: string): Promise<RepoScan>
   /** 近期改动热点（基于本地 git 历史） */

@@ -68,7 +68,7 @@ const router = createRouter({
       component: () => import('@/views/MemberActivityView.vue'),
       meta: {
         title: '人员活动',
-        description: '选一个人，看区间内的时间分配、申报与代码估算的差异；不判单日日报真假',
+        description: '选一个人，看区间内的时间分配、申报与可观测证据的差异；不判单日日报真假',
       },
     },
     {

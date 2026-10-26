@@ -237,6 +237,8 @@ async function generate() {
       llm: settingsStore.settings.llm,
       gitlab: settingsStore.settings.gitlab,
       autoClone: settingsStore.settings.analysis.autoClone,
+      autoIndex: settingsStore.settings.analysis.autoIndex,
+      codegraphPath: settingsStore.settings.analysis.codegraphPath,
       cloneDepth: settingsStore.settings.analysis.cloneDepth,
       onProgress: (message) => { profileStore.setProgress(id, message) },
     })

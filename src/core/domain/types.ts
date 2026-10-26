@@ -285,6 +285,28 @@ export interface GitCommit {
   fileChanges?: CommitFileChange[]
 }
 
+/**
+ * 代码之外的研发活动证据。
+ *
+ * 提交只能证明「写代码」的时刻；评审、Issue 流转、流水线排查同样占工作时间，
+ * 却不一定产生提交。这些事件来自 GitLab 项目事件流，只用于补足工作时段，
+ * 不替代提交逐条核对。
+ */
+export type WorkSignalKind = 'merge_request' | 'review' | 'issue' | 'pipeline'
+
+export interface WorkSignal {
+  id: string
+  kind: WorkSignalKind
+  at: string
+  title: string
+  projectId: number
+  projectPath: string
+  webUrl?: string
+  /** GitLab 用户名，用来和人员身份匹配 */
+  username?: string
+  authorName?: string
+}
+
 /* ------------------------------------------------------------------ *
  * 检查结论
  * ------------------------------------------------------------------ */
@@ -377,13 +399,15 @@ export interface InspectionSummary {
   /** 日报未覆盖但确有提交的项目，说明存在漏报 */
   orphanCommitCount: number
 
-  /* --- 工作量口径：全部由提交记录统计得出，不含会议等非编码工作 --- */
+  /* --- 工作量口径：由提交 + MR/评审/Issue 等活动证据推算，不含无法观测的会议 --- */
   /** 提交会话数（间隔超过 60 分钟算新会话） */
   sessions: number
   /** 有提交的 30 分钟时段数 */
   activeBuckets: number
   /** 首末提交跨度（小时，封顶 12） */
   presenceHours: number
+  /** 当天 MR / 评审 / Issue 活动条数 */
+  signalCount: number
   /** 活跃时段折算工时 */
   activeHours: number
   /** 预估有效工时区间 */

@@ -201,7 +201,7 @@ export async function resolveMcpServers(
   return servers
 }
 
-async function listTools(servers: AnalysisMcpServer[]): Promise<McpToolsResponse> {
+export async function listMcpTools(servers: AnalysisMcpServer[]): Promise<McpToolsResponse> {
   if (!isDesktop() || !servers.length)
     return { tools: [], errors: [] }
   try {
@@ -405,7 +405,7 @@ function buildPlannerPrompt(
   ].join('\n')
 }
 
-function resultText(raw: unknown): string {
+export function mcpResultText(raw: unknown): string {
   const obj = asRecord(raw)
   if (!obj)
     return clip(String(raw ?? ''), MAX_TOOL_RESULT_CHARS)
@@ -537,7 +537,7 @@ async function executeMcpTool(
   }), opts.signal)
   const errored = asRecord(raw)?.isError === true
   return {
-    text: resultText(raw),
+    text: mcpResultText(raw),
     error: errored ? '工具返回错误' : undefined,
   }
 }
@@ -582,7 +582,7 @@ export async function runToolChat(opts: ToolChatOptions): Promise<ToolChatResult
   const catalog: CatalogTool[] = []
   if (opts.servers.length) {
     opts.onStatus?.('正在连接代码工具…')
-    const listed = await listTools(opts.servers)
+    const listed = await listMcpTools(opts.servers)
     catalog.push(...listed.tools.map(toCatalogTool))
     toolErrors.push(...listed.errors)
   }

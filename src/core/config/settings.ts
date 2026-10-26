@@ -304,6 +304,8 @@ export interface AppSettings {
   rules: RuleSettings
   retention: RetentionSettings
   analysis: AnalysisSettings
+  /** 有效工时估算口径：提交会话、在岗跨度、活动事件的权重 */
+  workload: WorkloadSettings
   /** 界面主题：跟随系统 / 强制浅色 / 强制深色 */
   appearance: AppearanceSettings
   /** 工作日历：法定节假日 + 调休上班 + 公司自己的临时安排 */
@@ -389,6 +391,49 @@ export interface AnalysisSkill {
   /** 本地 markdown 文件路径 */
   path: string
   enabled: boolean
+}
+
+/**
+ * 有效工时估算口径。
+ *
+ * 这些参数不是「真理」，是公司自己的标定：提交节奏、评审文化、是否用 Issue
+ * 都会改变同一份证据对应的时长。放在设置里，是为了把假设写明白、可调整，
+ * 而不是藏在代码里。
+ */
+export interface WorkloadSettings {
+  /** 标准工时，用于计算饱和度 */
+  standardHours: number
+  /** 相邻提交超过这个间隔（分钟）算新的工作会话 */
+  sessionGapMinutes: number
+  /** 每个会话在首次提交前补的投入（分钟） */
+  sessionLeadMinutes: number
+  /** 每个会话在末次提交后补的收尾（分钟） */
+  sessionTailMinutes: number
+  /** 单个会话最多计多少小时 */
+  sessionCapHours: number
+  /** 有活动的一天至少计多少小时；0 = 不设下限 */
+  activeFloorHours: number
+  /** 首末活动跨度折算成工作时间的比例（0-1） */
+  presenceFactor: number
+  /** 单日有效工时上限（小时） */
+  maxHours: number
+  /** 是否读取 GitLab 的 MR / Issue / 评审事件作为活动证据 */
+  useSignals: boolean
+  /** 是否让模型按任务估算工作量（额外调用模型，结果作为上限参考） */
+  useLlmEffort: boolean
+}
+
+export const DEFAULT_WORKLOAD: WorkloadSettings = {
+  standardHours: 8,
+  sessionGapMinutes: 120,
+  sessionLeadMinutes: 30,
+  sessionTailMinutes: 30,
+  sessionCapHours: 4,
+  activeFloorHours: 2,
+  presenceFactor: 0.8,
+  maxHours: 10,
+  useSignals: true,
+  useLlmEffort: true,
 }
 
 export interface AnalysisMcpServer {
@@ -565,6 +610,7 @@ export function createDefaultSettings(): AppSettings {
       allowShellCommands: false,
       shellTimeoutSeconds: 60,
     },
+    workload: { ...DEFAULT_WORKLOAD },
     workCalendar: {
       // 默认给 2026 年的中国法定节假日；换年份时在设置页改成对应地址
       url: 'https://chinacalendar.app/ics/china-holidays-2026.ics',

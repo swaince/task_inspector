@@ -415,6 +415,10 @@ export function createWebTransport(): Transport {
       // 浏览器里没有安装进程可取消，静默返回
     },
 
+    async analysisIndex() {
+      throw new Error('codegraph 索引只在桌面端可用')
+    },
+
     async scanRepo() {
       throw new Error('代码扫描只在桌面端可用')
     },

@@ -3,7 +3,7 @@ import type { LlmSettings, GitLabSettings } from '../config/settings'
 import type { Project, ProjectRepo } from '../domain/types'
 import type { BranchActivity } from './branchCommits'
 import { GitLabClient } from '../adapters/gitlab'
-import { transport } from '../bridge'
+import { isDesktop, transport } from '../bridge'
 import { createLlmClient } from '../llm/client'
 import { collectBranchCommits } from './branchCommits'
 
@@ -132,6 +132,10 @@ export interface ProfileOptions {
   gitlab?: GitLabSettings
   /** 缺少本地代码时自动浅克隆 */
   autoClone?: boolean
+  /** 生成画像前确保 codegraph 索引存在（本地仓库） */
+  autoIndex?: boolean
+  /** codegraph 可执行文件；留空自动探测 */
+  codegraphPath?: string
   /** 浅克隆深度（提交数），0 = 完整克隆 */
   cloneDepth?: number
   /** 最多让模型写多少个模块，其余只统计不描述 */
@@ -820,6 +824,24 @@ export async function buildRepoProfile(
 
   // localPath 始终保留用户 checkout；分析默认分支时用的是临时 worktree
   base.localPath = found.path
+
+  /*
+   * codegraph 的 MCP 工具只有在仓库有 `.codegraph/` 索引时才返回内容。
+   * 画像生成前先确保索引：已有则增量 sync，没有则 init。失败不阻断画像，
+   * 但会提示，因为后续「申报对照」会拿不到代码符号。
+   */
+  if (opts.autoIndex && isDesktop()) {
+    opts.onProgress?.(`正在确保 ${repo.pathWithNamespace} 的 codegraph 索引…`)
+    try {
+      const indexed = await transport().analysisIndex(found.path, opts.codegraphPath)
+      opts.onProgress?.(`codegraph 索引已${indexed.action === 'sync' ? '更新' : '建立'}：${repo.pathWithNamespace}`)
+    }
+    catch (err) {
+      opts.onProgress?.(
+        `codegraph 索引未建立（${err instanceof Error ? err.message : String(err)}），代码结构仍可扫描，但申报对照拿不到符号级证据`,
+      )
+    }
+  }
 
   let scan = found.scan
   let scanPath = found.path

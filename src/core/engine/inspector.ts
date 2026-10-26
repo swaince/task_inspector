@@ -14,6 +14,7 @@ import type {
   MemberProfile,
   Project,
   VerdictLevel,
+  WorkSignal,
 } from '../domain/types'
 import type { CommitQuery, GitLabClient } from '../adapters/gitlab'
 import type { DailyReportSource } from '../adapters/dailyReport'
@@ -23,6 +24,7 @@ import {
   commitBelongsTo,
   resolveMemberIdentity,
   resolveProject,
+  signalBelongsTo,
 } from './matching'
 import {
   buildJudgePrompt,
@@ -35,6 +37,8 @@ import {
 } from './prompt'
 import { commitWindow, isCoreWindow } from './window'
 import { collectBranchCommits } from './branchCommits'
+import { collectWorkSignals } from './workSignals'
+import { estimateEffortBatch } from './effort'
 import type { DayMetrics } from './metrics'
 import { dayMetrics, groupedDayMetrics, saturationOf } from './metrics'
 
@@ -67,6 +71,15 @@ export interface InspectorDeps {
    * 不再每个人各拉一遍；文件变更由下面按成员筛选后再补。
    */
   fetchCommits?: (project: GitLabProjectRef, query: CommitQuery) => Promise<GitCommit[]>
+  /** 拉取一天的活动事件；执行器按「日期 + 仓库」缓存 */
+  fetchSignals?: (project: GitLabProjectRef, date: string) => Promise<WorkSignal[]>
+  /**
+   * 是否让模型按任务估算当天工作量。
+   *
+   * 单日检查可以开：多一次调用换来更合理的上限；区间批检时关掉，
+   * 否则几十人 × 几十天会把模型调用量放大到不可接受。
+   */
+  useLlmEffort?: boolean
   onProgress?: (progress: InspectionProgress) => void
   /** LLM 判定的增量输出，用于界面上的实时推理展示 */
   onThinking?: (delta: string, entryId: string) => void
@@ -200,6 +213,7 @@ export async function runInspection(
   const window = commitWindow(input.date, settings.rules)
   const matchers = buildMatchers(settings.rules)
   let commits: GitCommit[] = []
+  const signals: WorkSignal[] = []
 
   if (targets.length) {
     report({
@@ -256,6 +270,29 @@ export async function runInspection(
           message: `仓库 ${project.pathWithNamespace} 拉取失败：${reason}`,
           percent: 30 + Math.round(((done + 1) / targets.length) * 20),
         })
+      }
+
+      /*
+       * MR / 评审 / Issue 事件是补充证据，不是检查的必要条件：
+       * 部分实例不允许读事件接口，失败时静默跳过，提交仍然照常判定。
+       */
+      if (settings.workload.useSignals) {
+        try {
+          const collected = deps.fetchSignals
+            ? await deps.fetchSignals(project, input.date)
+            : (await collectWorkSignals(deps.gitlab, [project], input.date, input.date, {
+                maxEventsPerProject: 400,
+                signal,
+              })).signals
+          for (const item of collected) {
+            const at = Date.parse(item.at)
+            if (at >= Date.parse(window.since) && at < Date.parse(window.until) && signalBelongsTo(item, identity))
+              signals.push(item)
+          }
+        }
+        catch {
+          // 事件接口不可用时只影响工时估算的宽度，不影响提交证据
+        }
       }
       done++
       report({
@@ -467,7 +504,28 @@ export async function runInspection(
     for (const repo of project.repos ?? [])
       modeByRepoId.set(repo.id, mode)
   }
-  const workload = groupedDayMetrics(usableCommits, c => modeByRepoId.get(c.projectId) ?? 'manual')
+  const modeOf = (commit: GitCommit) => modeByRepoId.get(commit.projectId) ?? 'manual'
+  let workload = groupedDayMetrics(usableCommits, modeOf, { signals, workload: settings.workload })
+
+  if (deps.useLlmEffort && settings.workload.useLlmEffort && deps.llm.configured) {
+    report({ stage: 'summarizing', message: '正在按任务估算工作量…', percent: 88 })
+    const effort = await estimateEffortBatch(
+      input.member.name,
+      [{
+        date: input.date,
+        commits: usableCommits,
+        signals,
+        reportedHours: totalHours,
+        reportText: entries.map(e => e.content).filter(Boolean).join('；'),
+      }],
+      deps.llm,
+      settings.workload,
+      signal,
+    )
+    const day = effort?.days.get(input.date)
+    if (day)
+      workload = groupedDayMetrics(usableCommits, modeOf, { signals, workload: settings.workload, llm: day })
+  }
 
   const summary = buildSummary(orderedInspections, orphanCommits, totalHours, settings, workload)
 
@@ -635,6 +693,7 @@ export function buildSummary(
     sessions: workload.sessions,
     activeBuckets: workload.activeBuckets,
     presenceHours: workload.presenceHours,
+    signalCount: workload.signalCount,
     activeHours: workload.activeHours,
     effectiveLow: workload.effectiveLow,
     effectiveHigh: workload.effectiveHigh,

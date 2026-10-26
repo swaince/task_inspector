@@ -33,6 +33,7 @@ import { formatBytes, uid } from '@/lib/format'
 
 const settingsStore = useSettingsStore()
 const cfg = computed(() => settingsStore.settings.analysis)
+const wl = computed(() => settingsStore.settings.workload)
 const desktop = isDesktop()
 
 /** 默认路径由 settings store 统一解析，留空即用默认值 */
@@ -112,6 +113,36 @@ function saveShellTimeout() {
   cfg.value.shellTimeoutSeconds = Number.isFinite(value)
     ? Math.min(300, Math.max(5, Math.round(value)))
     : 60
+  void save()
+}
+
+type WorkloadNumberKey
+  = | 'standardHours'
+    | 'sessionGapMinutes'
+    | 'sessionLeadMinutes'
+    | 'sessionTailMinutes'
+    | 'sessionCapHours'
+    | 'activeFloorHours'
+    | 'presenceFactor'
+    | 'maxHours'
+
+const WORKLOAD_RANGES: Record<WorkloadNumberKey, { min: number, max: number, step: number }> = {
+  standardHours: { min: 4, max: 12, step: 0.5 },
+  sessionGapMinutes: { min: 15, max: 240, step: 15 },
+  sessionLeadMinutes: { min: 0, max: 120, step: 15 },
+  sessionTailMinutes: { min: 0, max: 120, step: 15 },
+  sessionCapHours: { min: 1, max: 8, step: 0.5 },
+  activeFloorHours: { min: 0, max: 6, step: 0.5 },
+  presenceFactor: { min: 0, max: 1, step: 0.05 },
+  maxHours: { min: 4, max: 16, step: 0.5 },
+}
+
+function saveWorkloadNumber(key: WorkloadNumberKey) {
+  const range = WORKLOAD_RANGES[key]
+  const value = Number(wl.value[key])
+  wl.value[key] = Number.isFinite(value)
+    ? Math.min(range.max, Math.max(range.min, value))
+    : range.min
   void save()
 }
 
@@ -653,6 +684,171 @@ onMounted(async () => {
           codegraph 需要项目目录已有 <code class="font-mono">.codegraph</code> 索引（<code class="font-mono">codegraph init</code>）；
           graphify 需要先生成 <code class="font-mono">graphify-out/graph.json</code>（<code class="font-mono">graphify update &lt;path&gt;</code>）。
           没有索引时工具会明确报错，不会退回成编造内容。
+        </p>
+      </CardContent>
+    </Card>
+
+    <Card class="gap-0 py-4">
+      <CardHeader class="px-4 pb-3">
+        <CardTitle class="text-sm">工时估算口径</CardTitle>
+        <CardDescription class="text-xs">
+          有效工时不是考勤，是按可观测证据推算的区间。这些参数决定证据怎么折算，按公司实际情况标定。
+        </CardDescription>
+      </CardHeader>
+      <CardContent class="space-y-3 px-4">
+        <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div class="space-y-1">
+            <div class="text-[11px] font-medium">标准工时</div>
+            <div class="flex items-center gap-1.5">
+              <Input
+                v-model.number="wl.standardHours"
+                type="number"
+                :min="WORKLOAD_RANGES.standardHours.min"
+                :max="WORKLOAD_RANGES.standardHours.max"
+                :step="WORKLOAD_RANGES.standardHours.step"
+                class="h-8 w-20 text-xs"
+                @change="saveWorkloadNumber('standardHours')"
+              />
+              <span class="text-[11px] text-muted-foreground">h/天</span>
+            </div>
+          </div>
+          <div class="space-y-1">
+            <div class="text-[11px] font-medium">会话间隔</div>
+            <div class="flex items-center gap-1.5">
+              <Input
+                v-model.number="wl.sessionGapMinutes"
+                type="number"
+                :min="WORKLOAD_RANGES.sessionGapMinutes.min"
+                :max="WORKLOAD_RANGES.sessionGapMinutes.max"
+                :step="WORKLOAD_RANGES.sessionGapMinutes.step"
+                class="h-8 w-20 text-xs"
+                @change="saveWorkloadNumber('sessionGapMinutes')"
+              />
+              <span class="text-[11px] text-muted-foreground">分钟</span>
+            </div>
+          </div>
+          <div class="space-y-1">
+            <div class="text-[11px] font-medium">会话封顶</div>
+            <div class="flex items-center gap-1.5">
+              <Input
+                v-model.number="wl.sessionCapHours"
+                type="number"
+                :min="WORKLOAD_RANGES.sessionCapHours.min"
+                :max="WORKLOAD_RANGES.sessionCapHours.max"
+                :step="WORKLOAD_RANGES.sessionCapHours.step"
+                class="h-8 w-20 text-xs"
+                @change="saveWorkloadNumber('sessionCapHours')"
+              />
+              <span class="text-[11px] text-muted-foreground">h</span>
+            </div>
+          </div>
+          <div class="space-y-1">
+            <div class="text-[11px] font-medium">单日上限</div>
+            <div class="flex items-center gap-1.5">
+              <Input
+                v-model.number="wl.maxHours"
+                type="number"
+                :min="WORKLOAD_RANGES.maxHours.min"
+                :max="WORKLOAD_RANGES.maxHours.max"
+                :step="WORKLOAD_RANGES.maxHours.step"
+                class="h-8 w-20 text-xs"
+                @change="saveWorkloadNumber('maxHours')"
+              />
+              <span class="text-[11px] text-muted-foreground">h</span>
+            </div>
+          </div>
+          <div class="space-y-1">
+            <div class="text-[11px] font-medium">会话前置</div>
+            <div class="flex items-center gap-1.5">
+              <Input
+                v-model.number="wl.sessionLeadMinutes"
+                type="number"
+                :min="WORKLOAD_RANGES.sessionLeadMinutes.min"
+                :max="WORKLOAD_RANGES.sessionLeadMinutes.max"
+                :step="WORKLOAD_RANGES.sessionLeadMinutes.step"
+                class="h-8 w-20 text-xs"
+                @change="saveWorkloadNumber('sessionLeadMinutes')"
+              />
+              <span class="text-[11px] text-muted-foreground">分钟</span>
+            </div>
+          </div>
+          <div class="space-y-1">
+            <div class="text-[11px] font-medium">会话收尾</div>
+            <div class="flex items-center gap-1.5">
+              <Input
+                v-model.number="wl.sessionTailMinutes"
+                type="number"
+                :min="WORKLOAD_RANGES.sessionTailMinutes.min"
+                :max="WORKLOAD_RANGES.sessionTailMinutes.max"
+                :step="WORKLOAD_RANGES.sessionTailMinutes.step"
+                class="h-8 w-20 text-xs"
+                @change="saveWorkloadNumber('sessionTailMinutes')"
+              />
+              <span class="text-[11px] text-muted-foreground">分钟</span>
+            </div>
+          </div>
+          <div class="space-y-1">
+            <div class="text-[11px] font-medium">有活动日下限</div>
+            <div class="flex items-center gap-1.5">
+              <Input
+                v-model.number="wl.activeFloorHours"
+                type="number"
+                :min="WORKLOAD_RANGES.activeFloorHours.min"
+                :max="WORKLOAD_RANGES.activeFloorHours.max"
+                :step="WORKLOAD_RANGES.activeFloorHours.step"
+                class="h-8 w-20 text-xs"
+                @change="saveWorkloadNumber('activeFloorHours')"
+              />
+              <span class="text-[11px] text-muted-foreground">h</span>
+            </div>
+          </div>
+          <div class="space-y-1">
+            <div class="text-[11px] font-medium">在岗跨度折算</div>
+            <div class="flex items-center gap-1.5">
+              <Input
+                v-model.number="wl.presenceFactor"
+                type="number"
+                :min="WORKLOAD_RANGES.presenceFactor.min"
+                :max="WORKLOAD_RANGES.presenceFactor.max"
+                :step="WORKLOAD_RANGES.presenceFactor.step"
+                class="h-8 w-20 text-xs"
+                @change="saveWorkloadNumber('presenceFactor')"
+              />
+              <span class="text-[11px] text-muted-foreground">0–1</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5">
+          <div class="min-w-0">
+            <div class="text-xs font-medium">读取 MR / 评审 / Issue 活动</div>
+            <p class="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              从 GitLab 项目事件流补充没有提交的工作时段。失败时自动跳过，不影响提交核对。
+            </p>
+          </div>
+          <Switch
+            :model-value="wl.useSignals"
+            @update:model-value="v => { wl.useSignals = !!v; save() }"
+          />
+        </div>
+
+        <div class="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5">
+          <div class="min-w-0">
+            <div class="text-xs font-medium">模型按任务估算</div>
+            <p class="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              读取提交、活动证据和日报内容，估算每日实际投入区间。日报只作为待核实声明，不会直接抄成结果。
+              需要模型已配置，且会额外产生调用。
+            </p>
+          </div>
+          <Switch
+            :model-value="wl.useLlmEffort"
+            @update:model-value="v => { wl.useLlmEffort = !!v; save() }"
+          />
+        </div>
+
+        <p class="text-[11px] leading-relaxed text-muted-foreground">
+          「代码可核对」是只认提交的下限；「有效工时」上限会叠加活动事件、在岗跨度和模型任务估算。
+          同一天的工作只会取其中最宽的一路证据，不会相加。
         </p>
       </CardContent>
     </Card>

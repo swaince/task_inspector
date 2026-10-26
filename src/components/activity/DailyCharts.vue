@@ -18,6 +18,8 @@ interface DayPoint {
   effectiveHigh: number
   /** 当天日报里提到过这个项目 / 这个人 */
   hasReport: boolean
+  /** 当天的 MR / 评审 / Issue 活动条数 */
+  signals?: number
 }
 
 const props = defineProps<{
@@ -39,13 +41,14 @@ const commitSpec = computed(() => ({
 }))
 
 const hoursSpec = computed(() => ({
-  title: '每日申报工时与代码估算',
+  title: '每日工时：申报与可观测证据',
   unit: 'h',
   type: 'bar-line',
   labels: labels.value,
   series: [
     { name: '日报申报', type: 'bar', data: props.days.map(d => d.reportedHours) },
-    { name: '代码估算', type: 'line', data: props.days.map(d => d.effectiveHigh) },
+    { name: '可核对下限', type: 'line', data: props.days.map(d => d.effectiveLow) },
+    { name: '有效上限', type: 'line', data: props.days.map(d => d.effectiveHigh) },
   ],
 }))
 
@@ -54,6 +57,7 @@ const emptyDays = computed(() => {
   return props.days.filter(d =>
     (!allowed || allowed.has(d.date))
     && d.commits === 0
+    && !(d.signals ?? 0)
     && !d.hasReport,
   ).length
 })

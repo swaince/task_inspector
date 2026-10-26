@@ -1,6 +1,6 @@
 import type { GitLabClient } from '../adapters/gitlab'
 import type { RuleSettings } from '../config/settings'
-import type { DailyReport, GitCommit, Project } from '../domain/types'
+import type { DailyReport, GitCommit, Project, WorkSignal } from '../domain/types'
 import type { ProjectProfile, RepoProfile } from './profile'
 import { formatDateCN, formatDateTime, todayKey } from '@/lib/format'
 import { collectProjectCommits } from './activity'
@@ -28,6 +28,8 @@ export interface ProjectContextStats {
   modules: number
   /** 实际写进资料的提交/日报条数（可能少于抓取量） */
   commits: number
+  /** 写进资料的 MR / 评审 / Issue 活动条数 */
+  signals: number
   reportEntries: number
   failures: string[]
   builtAt: string
@@ -47,6 +49,8 @@ export interface ProjectContextInput {
   gitlab?: GitLabClient
   /** 回看天数，包含今天。默认 30 天 */
   days?: number
+  /** 是否读取 MR / 评审 / Issue 活动；默认读取 */
+  useSignals?: boolean
   /** 日报刷新失败之类需要让模型知道的限制 */
   notes?: string[]
   signal?: AbortSignal
@@ -271,6 +275,20 @@ function describeReportEntries(entries: ReportEntryLine[]) {
   }).join('\n')
 }
 
+const SIGNAL_LABEL: Record<WorkSignal['kind'], string> = {
+  merge_request: 'MR',
+  review: '评审',
+  issue: 'Issue',
+  pipeline: '流水线',
+}
+
+function describeSignals(signals: WorkSignal[]) {
+  return signals.map((signal) => {
+    const who = signal.authorName || signal.username || '未知作者'
+    return `- ${formatDateTime(signal.at)} ${who} [${SIGNAL_LABEL[signal.kind]}]：${clip(signal.title, 120)}（${signal.projectPath}）`
+  }).join('\n')
+}
+
 /**
  * 拉取最近提交并拼出资料包。
  *
@@ -285,6 +303,7 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
   const failures: string[] = []
 
   let commits: GitCommit[] = []
+  let signals: WorkSignal[] = []
   const refs = toProjectRefs(input.project)
   if (refs.length && input.gitlab) {
     input.onProgress?.(`正在读取 ${refs.length} 个仓库最近 ${days} 天的提交…`)
@@ -293,10 +312,12 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
       rules: input.rules,
       perPage: 100,
       maxCommitsPerProject: MAX_COMMITS,
+      fetchSignals: input.useSignals !== false,
       signal: input.signal,
       onProgress: p => input.onProgress?.(p.message),
     })
     commits = collected.batches.flatMap(batch => batch.commits)
+    signals = collected.batches.flatMap(batch => batch.signals ?? [])
     failures.push(...collected.failures.map(f => `${f.projectPath}：${f.message}`))
   }
   else if (!refs.length) {
@@ -310,6 +331,14 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
     .filter(commit => !isIgnoredCommit(commit.title, input.rules))
     .sort((a, b) => b.committedDate.localeCompare(a.committedDate))
   const listedCommits = commits.slice(0, MAX_COMMITS)
+
+  signals = signals
+    .filter((signal) => {
+      const date = signal.at.slice(0, 10)
+      return date >= from && date <= to
+    })
+    .sort((a, b) => b.at.localeCompare(a.at))
+  const listedSignals = signals.slice(0, 60)
 
   input.onProgress?.('正在整理相关日报…')
   const reportEntries: ReportEntryLine[] = []
@@ -353,6 +382,19 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
     sections.push(`## 最近提交\n最近 ${days} 天没有读到提交记录${failures.length ? '（部分仓库拉取失败，见资料说明）' : ''}。`)
   }
 
+  if (input.useSignals !== false) {
+    if (listedSignals.length) {
+      sections.push(
+        `## 最近 MR / 评审 / Issue 活动（${listedSignals.length} 条）\n`
+        + '这些活动代表评审、需求跟进和问题排查，同样占用工作时间；提交少时不能据此判断没工作。\n\n'
+        + describeSignals(listedSignals),
+      )
+    }
+    else {
+      sections.push('## 最近 MR / 评审 / Issue 活动\n最近一段时间没有读到这类活动（也可能模板/权限没有开放事件接口）。')
+    }
+  }
+
   if (listedEntries.length) {
     sections.push(
       `## 相关日报条目（${reportEntries.length} 条匹配，列出最近 ${listedEntries.length} 条）\n`
@@ -387,6 +429,7 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
       profile: Boolean(profile),
       modules,
       commits: listedCommits.length,
+      signals: listedSignals.length,
       reportEntries: reportEntries.length,
       failures: [...notes, ...failures],
       builtAt: new Date().toISOString(),

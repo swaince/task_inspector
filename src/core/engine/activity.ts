@@ -1,11 +1,12 @@
-import type { GitCommit, GitLabProjectRef, MemberProfile } from '../domain/types'
+import type { GitCommit, GitLabProjectRef, MemberProfile, WorkSignal } from '../domain/types'
 import type { RuleSettings } from '../config/settings'
 import type { GitLabClient } from '../adapters/gitlab'
 import type { MemberIdentity } from './matching'
 import type { BranchActivity } from './branchCommits'
-import { commitBelongsTo, resolveMemberIdentity } from './matching'
+import { commitBelongsTo, resolveMemberIdentity, signalBelongsTo } from './matching'
 import { commitWindow } from './window'
 import { collectBranchCommits } from './branchCommits'
+import { collectWorkSignals } from './workSignals'
 
 /**
  * 事实层：某段时间里，各个仓库实际发生了哪些提交。
@@ -27,6 +28,8 @@ export interface ProjectCommits {
   commits: GitCommit[]
   /** 区间内有提交的分支，供统计和报告注明分支工作 */
   branches?: ProjectBranchActivity[]
+  /** 同一区间的 MR / 评审 / Issue 活动，补足没有提交的工作时段 */
+  signals?: WorkSignal[]
 }
 
 export interface ActivityFailure {
@@ -59,6 +62,9 @@ export interface CollectOptions {
   rules: RuleSettings
   perPage: number
   maxCommitsPerProject: number
+  /** 同时读取 MR / 评审 / Issue 事件，默认关闭 */
+  fetchSignals?: boolean
+  maxSignalsPerProject?: number
   signal?: AbortSignal
   onProgress?: (progress: ActivityProgress) => void
 }
@@ -89,6 +95,10 @@ export async function collectProjectCommits(
     if (opts.signal?.aborted)
       break
 
+    let commits: GitCommit[] = []
+    let branches: ProjectBranchActivity[] = []
+    let signals: WorkSignal[] = []
+
     try {
       // 不只默认分支：区间内有提交的功能分支同样参与统计
       const result = await collectBranchCommits(
@@ -104,25 +114,40 @@ export async function collectProjectCommits(
         },
         { maxBranches: 24 },
       )
+      commits = result.commits
+      branches = result.branches.map(branch => ({
+        ...branch,
+        repoPath: project.pathWithNamespace,
+      }))
       for (const failure of result.failures)
         failures.push({ projectPath: project.pathWithNamespace, message: failure })
-      if (result.commits.length) {
-        batches.push({
-          projectId: project.id,
-          projectPath: project.pathWithNamespace,
-          projectName: project.name,
-          commits: result.commits,
-          branches: result.branches.map(branch => ({
-            ...branch,
-            repoPath: project.pathWithNamespace,
-          })),
-        })
-      }
     }
     catch (err) {
       failures.push({
         projectPath: project.pathWithNamespace,
         message: err instanceof Error ? err.message : String(err),
+      })
+    }
+
+    if (opts.fetchSignals) {
+      const collected = await collectWorkSignals(opts.gitlab, [project], from, to, {
+        perPage: 100,
+        maxEventsPerProject: opts.maxSignalsPerProject ?? 800,
+        signal: opts.signal,
+      })
+      signals = collected.signals
+      for (const failure of collected.failures)
+        failures.push({ projectPath: project.pathWithNamespace, message: `活动事件读取失败：${failure}` })
+    }
+
+    if (commits.length || signals.length) {
+      batches.push({
+        projectId: project.id,
+        projectPath: project.pathWithNamespace,
+        projectName: project.name,
+        commits,
+        branches,
+        signals,
       })
     }
 
@@ -167,6 +192,15 @@ export function commitOwner(
   identities: Array<{ member: MemberProfile, identity: MemberIdentity }>,
 ): MemberProfile | null {
   const hit = identities.find(i => commitBelongsTo(commit, i.identity))
+  return hit?.member ?? null
+}
+
+/** 找一条活动事件的归属人；规则同提交，但事件只有 GitLab 用户名 */
+export function signalOwner(
+  signal: WorkSignal,
+  identities: Array<{ member: MemberProfile, identity: MemberIdentity }>,
+): MemberProfile | null {
+  const hit = identities.find(i => signalBelongsTo(signal, i.identity))
   return hit?.member ?? null
 }
 

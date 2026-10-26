@@ -1,5 +1,5 @@
 import type { AppSettings } from '../config/settings'
-import type { DailyReport, GitCommit, GitLabProjectRef, InspectionProgress, InspectionResult, MemberIdentityInput, MemberProfile } from '../domain/types'
+import type { DailyReport, GitCommit, GitLabProjectRef, InspectionProgress, InspectionResult, MemberIdentityInput, MemberProfile, WorkSignal } from '../domain/types'
 import type { ProjectCatalog } from '../engine/projectCatalog'
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
@@ -10,6 +10,7 @@ import { createDailyReportSource } from '../adapters/dailyReport'
 import { createLlmClient } from '../llm/client'
 import { runInspection } from '../engine/inspector'
 import { collectBranchCommits } from '../engine/branchCommits'
+import { collectWorkSignals } from '../engine/workSignals'
 import { buildProjectCatalog, catalogFingerprint } from '../engine/projectCatalog'
 import { useSettingsStore } from './settings'
 import { useReportStore } from './reports'
@@ -161,6 +162,8 @@ export const useRunnerStore = defineStore('runner', () => {
     llm: ReturnType<typeof createLlmClient>,
     reportSource: ReturnType<typeof createDailyReportSource>,
     commitCache: Map<string, Promise<GitCommit[]>>,
+    signalCache: Map<string, Promise<WorkSignal[]>>,
+    useLlmEffort: boolean,
   ) {
     return {
       settings,
@@ -170,6 +173,7 @@ export const useRunnerStore = defineStore('runner', () => {
       knownProjects: catalog.value?.projects ?? [],
       projects: projectStore.items,
       members: memberStore.items,
+      useLlmEffort,
       /*
        * 同一天、同一个仓库的提交列表在整次执行里只请求一次。
        * 两个成员检查同一天时，第二个成员直接复用；文件变更由引擎按作者
@@ -196,6 +200,25 @@ export const useRunnerStore = defineStore('runner', () => {
               throw err
             })
           commitCache.set(key, pending)
+        }
+        return pending
+      },
+      /*
+       * 活动事件同样按「日期 + 仓库」缓存：同一天多个成员共享一次请求。
+       * 失败时返回空数组而不是抛出——事件只是工时估算的补充证据，
+       * 不能因为 GitLab 不让读事件就让整次检查失败。
+       */
+      fetchSignals: (project: GitLabProjectRef, day: string) => {
+        const key = `${day}|${project.id}`
+        let pending = signalCache.get(key)
+        if (!pending) {
+          pending = collectWorkSignals(gitlab, [project], day, day, { maxEventsPerProject: 400, signal })
+            .then(result => result.signals)
+            .catch((err) => {
+              signalCache.delete(key)
+              throw err
+            })
+          signalCache.set(key, pending)
         }
         return pending
       },
@@ -241,6 +264,7 @@ export const useRunnerStore = defineStore('runner', () => {
       Object.values(reportStore.cache).flat(),
     )
     const commitCache = new Map<string, Promise<GitCommit[]>>()
+    const signalCache = new Map<string, Promise<WorkSignal[]>>()
 
     /*
      * 一次执行（单日或区间）共用同一个 runId。
@@ -286,7 +310,7 @@ export const useRunnerStore = defineStore('runner', () => {
           try {
             const result = await runInspection(
               { date: plan.date, member: target.member, report },
-              buildDeps(settings, abort.signal, plan.date, gitlab, llm, reportSource, commitCache),
+              buildDeps(settings, abort.signal, plan.date, gitlab, llm, reportSource, commitCache, signalCache, plans.length === 1),
             )
             const enriched: InspectionResult = {
               ...result,

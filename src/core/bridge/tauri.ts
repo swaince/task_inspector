@@ -261,6 +261,11 @@ export function createTauriTransport(): Transport {
       await invoke('analysis_install_cancel', { kind })
     },
 
+    async analysisIndex(path, configuredPath) {
+      const { invoke } = await core()
+      return invoke('analysis_index', { path, configured: configuredPath ?? null })
+    },
+
     async scanRepo(path) {
       const { invoke } = await core()
       return invoke('scan_repo', { path })

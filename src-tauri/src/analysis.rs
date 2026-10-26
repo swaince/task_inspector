@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -55,6 +55,18 @@ pub struct ClearResult {
     pub removed_entries: u64,
 }
 
+/// codegraph 索引结果。activity / profile 在分析代码前会先确保索引存在。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexResult {
+    pub path: String,
+    /// init = 首次建索引；sync = 增量更新
+    pub action: String,
+    /// .codegraph/codegraph.db 的路径，方便界面展示
+    pub database: String,
+    pub output: String,
+}
+
 /// 缓存目录里可能出现的「不是缓存」的痕迹。
 /// 命中就拒绝清空——把用户的仓库副本误删是不可恢复的事故。
 const PROTECTED_ENTRIES: [&str; 1] = [".git"];
@@ -77,7 +89,9 @@ fn tool_names(kind: &str) -> Result<&'static str, String> {
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let exts: &[&str] = if cfg!(windows) {
-        &["", ".exe", ".cmd", ".bat", ".ps1"]
+        // Windows 上 npm 的全局命令通常是 .cmd/.exe；无扩展名的那个
+        // 往往是给 Git Bash 用的 shell 脚本，直接 CreateProcess 会报 193。
+        &[".exe", ".cmd", ".bat", ".ps1", ""]
     } else {
         &[""]
     };
@@ -109,6 +123,153 @@ fn read_version(path: &Path) -> Option<String> {
         line.truncate(120);
     }
     Some(line)
+}
+
+/// 确保一个本地仓库有 codegraph 索引。
+///
+/// codegraph 的索引不在时，MCP 工具会直接报错或只给空结果。活动分析依赖
+/// 「按改动文件查符号」，所以这里在分析前显式建/增量更新一次：
+/// - 已有 `.codegraph/codegraph.db` 时跑 `codegraph sync`；
+/// - 没有时跑 `codegraph init`（新版 init 会同时建图）。
+#[tauri::command]
+pub async fn analysis_index(
+    path: String,
+    configured: Option<String>,
+) -> Result<IndexResult, String> {
+    let root = PathBuf::from(path.trim());
+    if !root.is_dir() {
+        return Err(format!("目录不存在：{}", root.display()));
+    }
+
+    let status = tool_status("codegraph".into(), configured)?;
+    if !status.found {
+        return Err(status
+            .error
+            .unwrap_or_else(|| "没有找到 codegraph，请先在设置里安装或指定路径".into()));
+    }
+    let tool = PathBuf::from(status.path.ok_or("codegraph 路径为空")?);
+    let tool = normalize_executable(tool);
+
+    let db = root.join(".codegraph").join("codegraph.db");
+    let mut action = if db.is_file() { "sync" } else { "init" };
+    let mut output = match run_codegraph(&tool, action, &root).await {
+        Ok(text) => text,
+        Err(err) if action == "sync" => {
+            // 索引文件在但 sync 不可用（旧版本/索引损坏）时，退回完整重建
+            action = "init";
+            run_codegraph(&tool, "init", &root)
+                .await
+                .map_err(|retry| format!("{err}；重试 init 也失败：{retry}"))?
+        }
+        Err(err) => return Err(err),
+    };
+
+    if !db.is_file() {
+        return Err(format!(
+            "codegraph {action} 执行完了，但没有生成 {}：{}",
+            db.display(),
+            tail(&output, 600)
+        ));
+    }
+
+    output = tail(&output, 4000);
+    Ok(IndexResult {
+        path: root.to_string_lossy().into_owned(),
+        action: action.into(),
+        database: db.to_string_lossy().into_owned(),
+        output,
+    })
+}
+
+async fn run_codegraph(tool: &Path, action: &str, root: &Path) -> Result<String, String> {
+    let ext = tool
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    let mut command = if cfg!(windows) && (ext == "cmd" || ext == "bat") {
+        // .cmd/.bat 不能直接 CreateProcess；用 cmd /C 包一层。
+        // 参数分开传，不要拼成一整条带引号的字符串：cmd 对首尾引号的处理
+        // 很容易把 "path" 当成命令名的一部分，报「不是内部或外部命令」。
+        let mut cmd = tokio::process::Command::new("cmd");
+        cmd.arg("/C").arg(tool).arg(action).arg(root);
+        cmd
+    } else if cfg!(windows) && ext == "ps1" {
+        let mut cmd = tokio::process::Command::new("powershell");
+        cmd.arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(tool)
+            .arg(action)
+            .arg(root);
+        cmd
+    } else {
+        let mut cmd = tokio::process::Command::new(tool);
+        cmd.arg(action).arg(root);
+        cmd
+    };
+
+    command
+        .current_dir(root)
+        .env("CI", "1")
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let output = tokio::time::timeout(Duration::from_secs(900), command.output())
+        .await
+        .map_err(|_| format!("codegraph {action} 超时（15 分钟）"))?
+        .map_err(|err| format!("无法启动 codegraph（{}）：{err}", tool.display()))?;
+
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.stderr.is_empty() {
+        if !text.ends_with('\n') && !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+
+    if !output.status.success() {
+        return Err(format!(
+            "codegraph {action} 失败（退出码 {:?}）：{}",
+            output.status.code(),
+            tail(&text, 800)
+        ));
+    }
+
+    Ok(text)
+}
+
+/// Windows 上把无扩展名的 npm shim 换成可直接执行的 `.cmd`/`.exe`。
+///
+/// `where codegraph` 经常先命中无扩展名的 shell 脚本；它给 Git Bash 用，
+/// 直接 `CreateProcess` 会报「%1 不是有效的 Win32 应用程序」。
+fn normalize_executable(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if path.extension().is_none() {
+            for ext in ["cmd", "exe", "bat"] {
+                let candidate = path.with_extension(ext);
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    path
+}
+
+fn tail(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.trim().to_string();
+    }
+    let skip = count - max_chars;
+    let tail: String = text.chars().skip(skip).collect();
+    format!("…{tail}")
 }
 
 /// 探测一个工具。

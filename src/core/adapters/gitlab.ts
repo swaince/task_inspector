@@ -62,6 +62,51 @@ interface RawGitLabBranch {
   }
 }
 
+interface RawGitLabEvent {
+  id: number
+  action_name: string
+  target_type?: string | null
+  target_title?: string | null
+  created_at: string
+  author?: {
+    name?: string
+    username?: string
+  }
+  note?: {
+    noteable_type?: string
+    body?: string
+    system?: boolean
+  }
+  push_data?: {
+    commit_count?: number
+    ref?: string
+    commit_title?: string | null
+  }
+}
+
+/** 项目事件流里的一个可核对活动 */
+export interface GitLabEventRef {
+  id: number
+  action: string
+  targetType?: string
+  targetTitle?: string
+  createdAt: string
+  authorUsername?: string
+  authorName?: string
+  noteType?: string
+  noteBody?: string
+  isSystemNote?: boolean
+}
+
+export interface ProjectEventQuery {
+  /** YYYY-MM-DD；GitLab 的事件接口只接受日期，不接受完整时间 */
+  after: string
+  before: string
+  perPage: number
+  maxEvents: number
+  signal?: AbortSignal
+}
+
 /** 项目关联选择器用的组结果 */
 export interface GitLabGroupRef {
   id: number
@@ -350,6 +395,63 @@ export class GitLabClient {
         })
       }
       if (raw.length < 100)
+        break
+      page++
+    }
+
+    return out
+  }
+
+  /**
+   * 项目事件流：push、MR 开/合、Issue、评论都在这里。
+   *
+   * 提交只记录「写代码」的时刻；评审、Issue 流转同样占用工时，
+   * 但不会产生提交。事件接口一次返回多种类型，比逐个拉 MR、Issue、
+   * 评论省很多请求，也能覆盖「只评审不写码」的日子。
+   *
+   * `after`/`before` 只接受日期；事件较大时按上限截断，调用方负责提示。
+   */
+  async listProjectEvents(
+    project: GitLabProjectRef,
+    query: ProjectEventQuery,
+  ): Promise<GitLabEventRef[]> {
+    const out: GitLabEventRef[] = []
+    const perPage = Math.max(1, Math.min(query.perPage, 100))
+    let page = 1
+
+    while (out.length < query.maxEvents) {
+      if (query.signal?.aborted)
+        break
+      const batch = await this.get<RawGitLabEvent[]>(
+        `/projects/${project.id}/events`,
+        {
+          after: query.after,
+          before: query.before,
+          per_page: Math.min(perPage, query.maxEvents - out.length),
+          page,
+        },
+      )
+      if (!batch.length)
+        break
+
+      for (const event of batch) {
+        if (out.length >= query.maxEvents)
+          break
+        out.push({
+          id: event.id,
+          action: event.action_name,
+          targetType: event.target_type ?? undefined,
+          targetTitle: event.target_title ?? undefined,
+          createdAt: event.created_at,
+          authorUsername: event.author?.username,
+          authorName: event.author?.name,
+          noteType: event.note?.noteable_type,
+          noteBody: event.note?.body?.slice(0, 300),
+          isSystemNote: event.note?.system,
+        })
+      }
+
+      if (batch.length < perPage)
         break
       page++
     }

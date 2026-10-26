@@ -1,6 +1,6 @@
 import type { ActivityFailure, ProjectBranchActivity } from '../engine/activity'
 import type { ShareEstimate } from '../engine/estimate'
-import type { GitCommit } from '../domain/types'
+import type { GitCommit, WorkSignal } from '../domain/types'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
@@ -17,6 +17,8 @@ export interface MemberActivityRow {
   projectName: string
   projectPath: string
   commits: GitCommit[]
+  /** 同一天的 MR / 评审 / Issue 活动 */
+  signals?: WorkSignal[]
   reportedHours: number
   reportedContents: string[]
 }
@@ -30,6 +32,12 @@ export interface MemberActivitySnapshot {
   branches: ProjectBranchActivity[]
   failures: ActivityFailure[]
   estimate: ShareEstimate | null
+  /** 模型任务估算；恢复页面时和 rows 一起还原 */
+  effort?: {
+    byDate: Record<string, { low: number, high: number, reason: string }>
+    note: string | null
+    confidence: number | null
+  }
   analyzedAt: string
   liveFailed: string | null
   report: string

@@ -22,6 +22,8 @@ export interface LlmCallOptions {
   jsonMode?: boolean
   signal?: AbortSignal
   onDelta?: (text: string) => void
+  /** 单次调用覆盖输出上限；推理型模型会把额度耗在 reasoning 上时用得到 */
+  maxTokens?: number
 }
 
 export class LlmClient {
@@ -59,7 +61,7 @@ export class LlmClient {
         model: this.cfg.model.trim(),
         messages,
         temperature: this.cfg.temperature,
-        maxTokens: this.cfg.maxTokens,
+        maxTokens: opts.maxTokens ?? this.cfg.maxTokens,
         timeoutMs: this.cfg.timeoutMs,
         jsonMode: opts.jsonMode,
       },

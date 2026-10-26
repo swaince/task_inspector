@@ -215,7 +215,7 @@ const hasAttention = computed(() =>
       <div class="rounded-lg border bg-card p-4">
         <div class="mb-3 flex flex-wrap items-baseline gap-3">
           <span class="text-xs font-medium">工时对照</span>
-          <span class="text-[11px] text-muted-foreground">申报 / 可核对 / 代码估算 · 三者口径不同，不参与符合度得分</span>
+          <span class="text-[11px] text-muted-foreground">申报 / 可核对 / 证据推算 · 三者口径不同，不参与符合度得分</span>
         </div>
         <WorkloadCompare :summary="result.summary" />
       </div>

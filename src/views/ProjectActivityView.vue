@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ActivityRow as Row } from '@/core/store/activity'
-import type { GitCommit } from '@/core/domain/types'
-import type { ActivityFailure } from '@/core/engine/activity'
+import type { GitCommit, WorkSignal } from '@/core/domain/types'
+import type { ActivityFailure, ProjectCommits } from '@/core/engine/activity'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AlertTriangleIcon, ChevronRightIcon, Loader2Icon, PlayIcon, RefreshCwIcon, SparklesIcon } from '@lucide/vue'
@@ -15,15 +15,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import StructuredReport from '@/components/activity/StructuredReport.vue'
 import DailyCharts from '@/components/activity/DailyCharts.vue'
 import PersonContribution from '@/components/activity/PersonContribution.vue'
+import EvidenceComparison from '@/components/activity/EvidenceComparison.vue'
 import CommitInspectorDialog from '@/components/inspection/CommitInspectorDialog.vue'
 import ProjectPicker from '@/components/common/ProjectPicker.vue'
 import MetricLegend from '@/components/common/MetricLegend.vue'
 import { GitLabClient } from '@/core/adapters/gitlab'
 import { useWorkCalendar } from '@/core/calendar/useWorkCalendar'
-import { buildIdentities, collectProjectCommits, commitOwner } from '@/core/engine/activity'
+import { buildIdentities, collectProjectCommits, commitOwner, signalOwner } from '@/core/engine/activity'
 import { projectMatches, toProjectRefs } from '@/core/engine/matching'
 import { assignCommitDate, dateRange } from '@/core/engine/window'
-import { dayMetrics } from '@/core/engine/metrics'
+import { memberDayMetrics } from '@/core/engine/metrics'
+import { estimateEffortBatch } from '@/core/engine/effort'
+import type { EffortDayInput } from '@/core/engine/effort'
 import { createLlmClient } from '@/core/llm/client'
 import { useActivityStore } from '@/core/store/activity'
 import { useMemberStore } from '@/core/store/members'
@@ -47,6 +50,7 @@ const TABS = [
   { key: 'rows', label: '明细' },
   { key: 'day', label: '按天' },
   { key: 'person', label: '按人' },
+  { key: 'evidence', label: '申报对照' },
   { key: 'report', label: '分析报告' },
 ] as const
 
@@ -55,13 +59,13 @@ type ViewMode = typeof TABS[number]['key']
 /** 指标口径，显示在对应表格底部 */
 const DAY_LEGEND = [
   { label: '日期', desc: '提交按「前一天 20:00 ~ 次日 08:00」的窗口归属，与执行检查一致' },
-  { label: '提交', desc: '当天该项目下的提交条数，只统计仓库默认分支' },
-  { label: '参与人', desc: '当天有提交的人数；没匹配到人员实体的作者按邮箱单列' },
+  { label: '提交', desc: '当天该项目下所有有提交的分支，按提交 id 去重' },
+  { label: '参与人', desc: '当天有提交或活动的人数；没匹配到人员实体的作者按邮箱/用户名单列' },
   { label: '代码量', desc: '+新增 / -删除行数，来自 GitLab 提交统计，生成文件与格式化也会计入' },
   { label: '申报工时', desc: '当天日报里写到这个项目的工时合计，同一人多条会相加' },
   { label: '活跃时段', desc: '有提交的 30 分钟时段数之和，按人分别计算再相加' },
-  { label: '有效工时', desc: '按人按天的提交会话估算后求和，代码量按项目开发模式修正；只覆盖代码产出，不含会议/评审' },
-  { label: '有提交未申报', desc: '当天有提交、但日报没有提到这个项目的人数' },
+  { label: '有效工时', desc: '按人按天推算后求和：每人的下限只认提交（含首尾缓冲），上限叠加 MR/评审/Issue 活动、在岗跨度和模型任务估算；单日上限是每人每天，多人合计会超过 10h' },
+  { label: '有提交未申报', desc: '当天有提交或活动、但日报没有提到这个项目的人数' },
 ]
 
 const PERSON_LEGEND = [
@@ -70,6 +74,7 @@ const PERSON_LEGEND = [
   { label: '活跃天数', desc: '区间内有提交的天数，不是提交条数' },
   { label: '代码量', desc: '区间内累计 +新增 / -删除行数' },
   { label: '申报工时', desc: '区间内这个人在日报里为该项目申报的工时合计' },
+  { label: '有效工时', desc: '同一套证据推算口径：下限只认提交，上限叠加活动事件、在岗跨度和模型任务估算' },
   { label: '有提交未申报', desc: '有提交、但当天日报没写这个项目的天数' },
   { label: '最近提交', desc: '区间内最后一次提交的作者时间' },
 ]
@@ -89,6 +94,10 @@ const progress = ref('')
 const error = ref<string | null>(null)
 const failures = ref<ActivityFailure[]>([])
 const rows = ref<Row[]>([])
+/** 模型任务估算：key = memberKey|date */
+const llmEffort = ref<Map<string, { low: number, high: number }>>(new Map())
+const effortNote = ref<string | null>(null)
+const effortConfidence = ref<number | null>(null)
 const scannedAt = ref<string | null>(null)
 /** 实时拉日报失败时置位：此时「申报」列来自本地缓存，可能已经过期 */
 const liveFailed = ref<string | null>(null)
@@ -136,6 +145,13 @@ const DEV_MODE_LABEL: Record<'manual' | 'ai-assisted' | 'ai-driven', string> = {
   'ai-driven': 'AI 开发为主',
 }
 
+const SIGNAL_LABEL: Record<WorkSignal['kind'], string> = {
+  merge_request: 'MR',
+  review: '评审',
+  issue: 'Issue',
+  pipeline: '流水线',
+}
+
 const dates = computed(() => dateRange(from.value, to.value))
 
 /* 工作日历：节假日不计入缺报和活跃天数分母 */
@@ -153,6 +169,29 @@ const totals = computed(() => ({
   missingInReport: rows.value.filter(r => r.missingInReport).length,
   missingCommits: rows.value.filter(r => r.missingCommits).length,
 }))
+
+/** 区间内有效工时合计（按天汇总后求和，避免多项目重复计算在岗跨度） */
+const totalEffective = computed(() => ({
+  low: Math.round(byDay.value.reduce((s, d) => s + d.effectiveLow, 0) * 10) / 10,
+  high: Math.round(byDay.value.reduce((s, d) => s + d.effectiveHigh, 0) * 10) / 10,
+}))
+
+/** 申报对照用的原始数据 */
+const evidenceCommits = computed(() => rows.value.flatMap(row => row.commits))
+const evidenceReports = computed(() =>
+  rows.value
+    .filter(row => row.reported || row.contents.length)
+    .map(row => ({
+      date: row.date,
+      memberName: row.memberName,
+      content: row.contents.join('；'),
+      hours: row.hours,
+    })),
+)
+const evidenceGitlab = computed(() =>
+  settingsStore.configured ? new GitLabClient(settingsStore.settings.gitlab) : null,
+)
+const evidenceScope = computed(() => `${formatDateCN(from.value)} ~ ${formatDateCN(to.value)}`)
 
 /** 区间内有提交的分支：避免只看到默认分支，误判别的分支没干活 */
 const branchActivity = computed(() => activityStore.snapshot?.branches ?? [])
@@ -180,6 +219,8 @@ interface DayStat {
   hours: number
   /** 当天有提交但没写日报的人数 */
   missingPeople: number
+  /** MR / 评审 / Issue 活动条数 */
+  signals: number
   /** 按人分别计算后求和：活跃时段数 */
   activeBuckets: number
   /** 预估有效工时区间（Σ 各人） */
@@ -190,39 +231,68 @@ interface DayStat {
 }
 
 const byDay = computed<DayStat[]>(() => {
-  const map = new Map<string, DayStat>()
+  const statMap = new Map<string, DayStat>()
+  const groups = new Map<string, { date: string, memberKey: string, rows: Row[] }>()
+
   for (const row of rows.value) {
-    const stat = map.get(row.date) ?? {
-      date: row.date,
+    const key = `${row.date}|${row.memberKey}`
+    const group = groups.get(key) ?? { date: row.date, memberKey: row.memberKey, rows: [] }
+    group.rows.push(row)
+    groups.set(key, group)
+  }
+
+  for (const group of groups.values()) {
+    const stat = statMap.get(group.date) ?? {
+      date: group.date,
       commits: 0,
       people: 0,
       additions: 0,
       deletions: 0,
       hours: 0,
       missingPeople: 0,
+      signals: 0,
       activeBuckets: 0,
       effectiveLow: 0,
       effectiveHigh: 0,
       batchSuspect: false,
     }
-    const volume = volumeOf(row.commits)
-    // 按人算再汇总：把不同人的提交混在一起算「在场时长」会跨出一天
-    const metrics = dayMetrics(row.commits, { devMode: devMode.value })
-    stat.commits += row.commits.length
-    if (row.commits.length)
+
+    /*
+     * 同一个人的同一天可能有多行（多项目）；先合并再估算，
+     * 和人员活动页共用 memberDayMetrics，避免下限/模型估算被逐行重复相加。
+     */
+    const metrics = memberDayMetrics(
+      group.rows.map(row => ({
+        commits: row.commits,
+        signals: row.signals,
+        devMode: devMode.value,
+      })),
+      settingsStore.settings.workload,
+      llmEffort.value.get(`${group.memberKey}|${group.date}`) ?? null,
+    )
+
+    for (const row of group.rows) {
+      const volume = volumeOf(row.commits)
+      stat.commits += row.commits.length
+      stat.additions += volume.additions
+      stat.deletions += volume.deletions
+      stat.hours += row.hours
+      if (row.missingInReport)
+        stat.missingPeople++
+    }
+    stat.signals += metrics.signalCount
+    if (metrics.commits || metrics.signalCount)
       stat.people++
-    stat.additions += volume.additions
-    stat.deletions += volume.deletions
-    stat.hours += row.hours
     stat.activeBuckets += metrics.activeBuckets
     stat.effectiveLow += metrics.effectiveLow
     stat.effectiveHigh += metrics.effectiveHigh
+    stat.effectiveLow = Math.round(stat.effectiveLow * 10) / 10
+    stat.effectiveHigh = Math.round(stat.effectiveHigh * 10) / 10
     stat.batchSuspect ||= metrics.batchSuspect
-    if (row.missingInReport)
-      stat.missingPeople++
-    map.set(row.date, stat)
+    statMap.set(group.date, stat)
   }
-  return [...map.values()].sort((a, b) => b.date.localeCompare(a.date))
+
+  return [...statMap.values()].sort((a, b) => b.date.localeCompare(a.date))
 })
 
 interface PersonStat {
@@ -230,11 +300,14 @@ interface PersonStat {
   name: string
   unmatched: boolean
   commits: number
+  signals: number
   activeDays: number
   additions: number
   deletions: number
   hours: number
   missingDays: number
+  effectiveLow: number
+  effectiveHigh: number
   lastCommit: string
 }
 
@@ -244,19 +317,30 @@ const byPerson = computed<PersonStat[]>(() => {
     const stat = map.get(row.memberKey) ?? {
       key: row.memberKey,
       name: row.memberName,
-      unmatched: row.memberKey.startsWith('author:'),
+      unmatched: row.memberKey.startsWith('author:') || row.memberKey.startsWith('signal:'),
       commits: 0,
+      signals: 0,
       activeDays: 0,
       additions: 0,
       deletions: 0,
       hours: 0,
       missingDays: 0,
+      effectiveLow: 0,
+      effectiveHigh: 0,
       lastCommit: '',
     }
     const volume = volumeOf(row.commits)
     stat.commits += row.commits.length
-    if (row.commits.length)
+    stat.signals += row.signals?.length ?? 0
+    if (row.commits.length || row.signals?.length)
       stat.activeDays++
+    const metrics = memberDayMetrics(
+      [{ commits: row.commits, signals: row.signals, devMode: devMode.value }],
+      settingsStore.settings.workload,
+      llmEffort.value.get(`${row.memberKey}|${row.date}`) ?? null,
+    )
+    stat.effectiveLow += metrics.effectiveLow
+    stat.effectiveHigh += metrics.effectiveHigh
     stat.additions += volume.additions
     stat.deletions += volume.deletions
     stat.hours += row.hours
@@ -268,7 +352,7 @@ const byPerson = computed<PersonStat[]>(() => {
     }
     map.set(row.memberKey, stat)
   }
-  return [...map.values()].sort((a, b) => b.commits - a.commits)
+  return [...map.values()].sort((a, b) => (b.commits + b.signals) - (a.commits + a.signals))
 })
 
 /* ------------------------------------------------------------------ *
@@ -290,6 +374,7 @@ const reportDays = computed(() => {
       effectiveLow: stat?.effectiveLow ?? 0,
       effectiveHigh: stat?.effectiveHigh ?? 0,
       hasReport: (stat?.hours ?? 0) > 0,
+      signals: stat?.signals ?? 0,
     }
   })
 })
@@ -297,7 +382,10 @@ const reportDays = computed(() => {
 const reportHighlights = computed(() => {
   const days = reportDays.value
   const dayMap = new Map(days.map(d => [d.date, d]))
-  const active = workdayList.value.filter(d => (dayMap.get(d)?.commits ?? 0) > 0)
+  const active = workdayList.value.filter((d) => {
+    const point = dayMap.get(d)
+    return (point?.commits ?? 0) > 0 || (point?.signals ?? 0) > 0
+  })
   const peak = days.filter(d => d.commits > 0).sort((a, b) => b.commits - a.commits)[0]
   const total = days.reduce((s, d) => s + d.commits, 0)
   return [
@@ -341,12 +429,12 @@ const REPORT_SYSTEM = `你是研发效能分析师。根据一个项目在一段
 function buildReportPrompt(): string {
   const project = selected.value
   const dayLines = byDay.value.slice(0, 62).map(d =>
-    `${formatDateCN(d.date)}：提交 ${d.commits} 条，${d.people} 人参与，+${d.additions}/-${d.deletions}，`
-    + `申报 ${d.hours}h，有效工时 ${d.effectiveLow}-${d.effectiveHigh}h（仅代码产出），`
+    `${formatDateCN(d.date)}：提交 ${d.commits} 条（${d.signals} 条 MR/评审/Issue 活动），${d.people} 人参与，+${d.additions}/-${d.deletions}，`
+    + `申报 ${d.hours}h，有效工时 ${d.effectiveLow}-${d.effectiveHigh}h，`
     + `有提交未申报 ${d.missingPeople} 人`,
   )
   const personLines = byPerson.value.slice(0, 50).map(p =>
-    `${p.name}${p.unmatched ? '（未匹配到人员）' : ''}：提交 ${p.commits} 条，活跃 ${p.activeDays} 天，`
+    `${p.name}${p.unmatched ? '（未匹配到人员）' : ''}：提交 ${p.commits} 条（${p.signals} 条活动），活跃 ${p.activeDays} 天，`
     + `+${p.additions}/-${p.deletions}，申报 ${p.hours}h，有提交未申报 ${p.missingDays} 天`,
   )
   const recent = rows.value
@@ -364,9 +452,13 @@ function buildReportPrompt(): string {
       + `${branch.commits} 条，最近 ${branch.latestCommitAt ? formatDateTime(branch.latestCommitAt) : '未知'}；`
       + `近期：${branch.titles.slice(0, 3).join('；') || '（无标题）'}`)
 
+  const signalLines = rows.value
+    .flatMap(r => (r.signals ?? []).map(s => `${formatDateCN(r.date)} ${r.memberName} ${SIGNAL_LABEL[s.kind]}：${s.title}`))
+    .slice(0, 50)
+
   /* 图表要按完整日序列画，包括没有记录的天，否则趋势会断 */
   const chartDays = reportDays.value.map(d =>
-    `${formatDateCN(d.date)}：提交 ${d.commits} 条，申报 ${d.reportedHours}h，代码估算 ${d.effectiveLow}-${d.effectiveHigh}h`,
+    `${formatDateCN(d.date)}：提交 ${d.commits} 条，申报 ${d.reportedHours}h，有效工时 ${d.effectiveLow}-${d.effectiveHigh}h`,
   )
 
   /*
@@ -384,12 +476,14 @@ function buildReportPrompt(): string {
 
   return `项目：${project?.name ?? ''}${project?.code ? `（${project.code}）` : ''}\n`
     + `区间：${formatDateCN(from.value)} ~ ${formatDateCN(to.value)}（${dates.value.length} 个自然日，其中工作日 ${workdayList.value.length} 天）\n`
-    + `提交 ${totals.value.commits} 条，涉及 ${totals.value.people} 人；有提交未申报 ${totals.value.missingInReport} 条记录。\n`
-    + `口径：有效工时按人按天估算后求和（代码量按「${DEV_MODE_LABEL[devMode.value]}」模式修正），`
-    + `只统计代码产出（提交、活跃时段、改动量），不含会议、评审、答疑；数值是区间，不是精确工时。\n\n`
+    + `提交 ${totals.value.commits} 条，有效工时 ${totalEffective.value.low}–${totalEffective.value.high}h，涉及 ${totals.value.people} 人；有提交未申报 ${totals.value.missingInReport} 条记录。\n`
+    + `口径：有效工时按人按天推算后求和（代码量按「${DEV_MODE_LABEL[devMode.value]}」模式修正）；`
+    + `下限只认提交会话，上限叠加 MR/评审/Issue 活动、在岗跨度和模型任务估算；`
+    + `会议、答疑等没有系统痕迹的工作不强行计入，数值是区间，不是精确工时。\n\n`
     + `按天：\n${dayLines.join('\n') || '（无）'}\n\n`
     + `按人：\n${personLines.join('\n') || '（无）'}\n\n`
     + `分支活动：\n${branchLines.join('\n') || '（无分支信息）'}\n\n`
+    + `MR / 评审 / Issue 活动：\n${signalLines.join('\n') || '（无）'}\n\n`
     + `日报申报内容：\n${declared.join('\n') || '（无）'}\n\n`
     + `最近的提交标题：\n${recent.join('\n') || '（无）'}\n\n`
     + `每日序列（含无记录的天）：\n${chartDays.join('\n') || '（无）'}\n\n`
@@ -400,13 +494,13 @@ function buildReportPrompt(): string {
     + `周末和法定节假日没有提交、没有日报是正常的，不要写成漏报或缺勤；活跃天数、未申报记录都只按工作日判断。\n\n`
     + `请严格按以下结构输出，不要增删章节，也不要用文字重复表格里已有的数字：\n\n`
     + `## 总览\n`
-    + `一张三列表格：| 指标 | 数值 | 说明 |，至少包含提交条数、涉及人员、申报工时、代码估算有效工时、活跃工作日、有提交未申报记录、已申报无提交记录。\n\n`
+    + `一张三列表格：| 指标 | 数值 | 说明 |，至少包含提交条数、涉及人员、申报工时、有效工时区间、活跃工作日、有提交未申报记录、已申报无提交记录。\n\n`
     + `## 每日趋势\n`
     + `用上面的「每日序列」原样输出两个图表，每个图表放在一个 chart 代码块里，内容是合法 JSON，数字不得改动：\n`
-    + `1) 每日提交条数（柱状）；2) 每日申报工时（柱状）与代码估算（折线）。\n`
+    + `1) 每日提交条数（柱状）；2) 每日申报工时（柱状）、可核对下限与有效上限（折线）。\n`
     + '第一个图的格式：\n```chart\n{"title":"每日提交","unit":"条","labels":["2026年10月12日","2026年10月13日"],"series":[{"name":"提交","type":"bar","data":[8,6]}]}\n```\n'
     + `labels 一律写成「2026年10月21日」这种完整中文日期，不要用「10-21」「10月21日」。\n`
-    + `第二个图在同一份 series 里放两项：{"name":"申报工时","type":"bar","data":[...]} 和 {"name":"代码估算","type":"line","data":[...]}。\n`
+    + `第二个图在同一份 series 里放三项：{"name":"申报工时","type":"bar","data":[...]}、{"name":"可核对下限","type":"line","data":[...]} 和 {"name":"有效上限","type":"line","data":[...]}。\n`
     + `labels 必须覆盖区间内每一天，没提交的天写 0；JSON 里不要写注释，也不要包进 markdown 表格。\n\n`
     + `## 人员投入\n`
     + `一张表格：| 人员 | 提交 | 活跃天数 | 申报工时 | 有提交未申报 |。\n`
@@ -414,7 +508,8 @@ function buildReportPrompt(): string {
     + '```chart\n{"type":"donut","title":"人员提交占比","unit":"条","labels":["张三","李四"],"series":[{"name":"提交","data":[85,9]}]}\n```\n'
     + `数据用表格里的提交条数，labels 与表格里的人一一对应。\n\n`
     + `## 分支工作\n`
-    + `一张表格：| 仓库 | 分支 | 提交 | 最近提交 | 在做什么 |。「在做什么」用「分支活动」里的近期提交标题概括，一条分支一行；`
+    + `一张表格：| 仓库 | 分支 | 提交 | 最近提交 | 提交主题 |。「提交主题」用「分支活动」里的近期提交标题原样概括，一条分支一行；`
+    + `这一列只代表提交消息，不代表代码内容；代码层面的对照请看「申报对照」。`
     + `没有分支信息时只输出「数据不足」，不要臆测。\n\n`
     + `## 与日报的对照\n`
     + `一张表格：| 日期 | 人员 | 问题 | 依据 |，只列异常（有提交未申报 / 已申报无提交 / 无记录）。\n\n`
@@ -459,6 +554,9 @@ onMounted(async () => {
     from.value = snap.from
     to.value = snap.to
     rows.value = snap.rows
+    llmEffort.value = new Map(Object.entries(snap.effort?.byMemberDate ?? {}))
+    effortNote.value = snap.effort?.note ?? null
+    effortConfidence.value = snap.effort?.confidence ?? null
     failures.value = snap.failures
     scannedAt.value = snap.scannedAt
     liveFailed.value = snap.liveFailed
@@ -497,6 +595,9 @@ async function load() {
   error.value = null
   failures.value = []
   rows.value = []
+  llmEffort.value = new Map()
+  effortNote.value = null
+  effortConfidence.value = null
   liveFailed.value = null
   progress.value = '正在读取日报…'
 
@@ -516,11 +617,18 @@ async function load() {
       rules: settings.rules,
       perPage: settings.gitlab.perPage,
       maxCommitsPerProject: settings.rules.maxCommitsPerProject,
+      fetchSignals: settings.workload.useSignals,
       onProgress: p => (progress.value = p.message),
     })
     failures.value = failed
 
-    rows.value = buildRows(batches.flatMap(b => b.commits), range)
+    rows.value = buildRows(batches, range)
+
+    if (settings.workload.useLlmEffort) {
+      progress.value = '正在按任务估算工作量…'
+      await loadLlmEffort(rows.value)
+    }
+
     scannedAt.value = new Date().toLocaleTimeString()
 
     // 同一个项目 + 区间重扫时保留已有报告，否则清空（报告讲的是另一段数据）
@@ -531,6 +639,11 @@ async function load() {
       to: to.value,
       rows: rows.value,
       branches: batches.flatMap(batch => batch.branches ?? []),
+      effort: {
+        byMemberDate: Object.fromEntries(llmEffort.value),
+        note: effortNote.value,
+        confidence: effortConfidence.value,
+      },
       failures: failures.value,
       scannedAt: scannedAt.value,
       liveFailed: liveFailed.value,
@@ -555,7 +668,7 @@ async function load() {
  * 匹配不上人员实体的提交（外包、机器人、还没建实体）单独成行，不并进别人那里——
  * 并错比漏掉更难发现。
  */
-function buildRows(commits: GitCommit[], range: string[]): Row[] {
+function buildRows(batches: ProjectCommits[], range: string[]): Row[] {
   const rules = settingsStore.settings.rules
   const identities = buildIdentities(memberStore.items)
   const map = new Map<string, Row>()
@@ -570,6 +683,7 @@ function buildRows(commits: GitCommit[], range: string[]): Row[] {
         memberKey,
         memberName,
         commits: [],
+        signals: [],
         reported: false,
         hours: 0,
         contents: [],
@@ -581,14 +695,28 @@ function buildRows(commits: GitCommit[], range: string[]): Row[] {
     return row
   }
 
-  for (const commit of commits) {
-    const date = assignCommitDate(commit.authoredDate, range, rules)
-    if (!date)
-      continue
-    const owner = commitOwner(commit, identities)
-    const memberKey = owner ? (owner.reportMemberId || owner.id) : `author:${commit.authorEmail}`
-    const row = ensure(date, memberKey, owner?.name ?? commit.authorName)
-    row.commits.push(commit)
+  for (const batch of batches) {
+    for (const commit of batch.commits) {
+      const date = assignCommitDate(commit.authoredDate, range, rules)
+      if (!date)
+        continue
+      const owner = commitOwner(commit, identities)
+      const memberKey = owner ? (owner.reportMemberId || owner.id) : `author:${commit.authorEmail}`
+      const row = ensure(date, memberKey, owner?.name ?? commit.authorName)
+      row.commits.push(commit)
+    }
+
+    for (const signal of batch.signals ?? []) {
+      const date = assignCommitDate(signal.at, range, rules)
+      if (!date)
+        continue
+      const owner = signalOwner(signal, identities)
+      const memberKey = owner
+        ? (owner.reportMemberId || owner.id)
+        : `signal:${signal.username || signal.authorName || signal.id}`
+      const row = ensure(date, memberKey, owner?.name ?? signal.authorName ?? signal.username ?? '未匹配')
+      row.signals?.push(signal)
+    }
   }
 
   for (const date of range) {
@@ -604,9 +732,10 @@ function buildRows(commits: GitCommit[], range: string[]): Row[] {
   }
 
   for (const row of map.values()) {
+    const active = row.commits.length > 0 || (row.signals?.length ?? 0) > 0
     // 节假日没有提交/日报是正常的，不算漏报；只有工作日才标记
-    row.missingInReport = isWorkday(row.date) && row.commits.length > 0 && !row.reported
-    row.missingCommits = isWorkday(row.date) && row.reported && row.commits.length === 0
+    row.missingInReport = isWorkday(row.date) && active && !row.reported
+    row.missingCommits = isWorkday(row.date) && row.reported && !active
   }
 
   return [...map.values()].sort((a, b) =>
@@ -617,6 +746,69 @@ function buildRows(commits: GitCommit[], range: string[]): Row[] {
 function matchReportEntry(entry: { projectName: string, projectCode?: string }) {
   const project = selected.value
   return project ? projectMatches(project, entry) : false
+}
+
+/**
+ * 按人调用模型估算任务工作量。
+ *
+ * 一次区间里可能涉及几十个人；逐个调用会把等待时间和费用放大到不可接受。
+ * 只估算提交最多的一批人，其余的仍用确定性证据（提交 + 活动事件）的区间。
+ */
+async function loadLlmEffort(list: Row[]) {
+  const byMember = new Map<string, { name: string, commits: number, days: Map<string, EffortDayInput> }>()
+  for (const row of list) {
+    let member = byMember.get(row.memberKey)
+    if (!member) {
+      member = { name: row.memberName, commits: 0, days: new Map() }
+      byMember.set(row.memberKey, member)
+    }
+    member.commits += row.commits.length
+    const day = member.days.get(row.date) ?? {
+      date: row.date,
+      commits: [],
+      signals: [],
+      reportedHours: 0,
+      reportText: '',
+    }
+    day.commits.push(...row.commits)
+    day.signals.push(...(row.signals ?? []))
+    day.reportedHours = (day.reportedHours ?? 0) + row.hours
+    if (row.contents.length)
+      day.reportText = day.reportText ? `${day.reportText}；${row.contents.join('；')}` : row.contents.join('；')
+    member.days.set(row.date, day)
+  }
+
+  const targets = [...byMember.entries()]
+    .filter(([, member]) => member.commits > 0 || [...member.days.values()].some(d => d.signals.length || d.reportedHours))
+    .sort((a, b) => b[1].commits - a[1].commits)
+    .slice(0, 6)
+
+  const result = new Map<string, { low: number, high: number }>()
+  const notes: string[] = []
+  const confidences: number[] = []
+  const llm = createLlmClient(settingsStore.settings.llm)
+
+  for (const [memberKey, member] of targets) {
+    const effort = await estimateEffortBatch(
+      member.name,
+      [...member.days.values()],
+      llm,
+      settingsStore.settings.workload,
+    )
+    if (!effort)
+      continue
+    for (const [date, day] of effort.days)
+      result.set(`${memberKey}|${date}`, { low: day.low, high: day.high })
+    if (effort.note)
+      notes.push(`${member.name}：${effort.note}`)
+    confidences.push(effort.confidence)
+  }
+
+  llmEffort.value = result
+  effortNote.value = notes.length ? notes.slice(0, 3).join('；') : null
+  effortConfidence.value = confidences.length
+    ? confidences.reduce((s, c) => s + c, 0) / confidences.length
+    : null
 }
 
 function fmtTime(iso: string) {
@@ -660,6 +852,13 @@ function fmtTime(iso: string) {
               <RefreshCwIcon :size="11" class="mr-1 inline" />
               {{ scannedAt }} 扫描
             </span>
+            <span
+              v-if="effortConfidence !== null"
+              class="text-[11px] text-muted-foreground"
+              :title="effortNote ?? ''"
+            >
+              模型任务估算 {{ Math.round(effortConfidence * 100) }}%
+            </span>
             <Button class="ml-auto" :disabled="loading || !selected" @click="load">
               <Loader2Icon v-if="loading" :size="13" class="mr-1.5 animate-spin" />
               <PlayIcon v-else :size="13" class="mr-1.5" />
@@ -675,6 +874,8 @@ function fmtTime(iso: string) {
               提交按「前一天 20:00 ~ 次日 08:00」的窗口归属到日期，和「执行检查」用的是同一套规则，
               所以同一个提交在两个页面归属的日子一致。默认最近 7 天（截止昨天）——日报当天晚上才上报，
               含今天会不完整；周末和节假日按工作日历自动排除在缺报判断之外。
+              有效工时是区间：下限只认提交，上限叠加 MR/评审/Issue 活动、在岗跨度和模型任务估算，
+              参数可以在「设置 → 分析 → 工时估算口径」里调整。
             </p>
           </details>
         </CardContent>
@@ -703,7 +904,7 @@ function fmtTime(iso: string) {
       <Alert v-if="failures.length" variant="destructive">
         <AlertTriangleIcon :size="14" />
         <AlertDescription>
-          {{ failures.length }} 个仓库拉取失败，结果不完整：
+          {{ failures.length }} 项仓库数据读取失败，结果不完整：
           {{ failures.slice(0, 3).map(f => `${f.projectPath}（${f.message}）`).join('；') }}
         </AlertDescription>
       </Alert>
@@ -738,6 +939,11 @@ function fmtTime(iso: string) {
             <div class="text-xl font-semibold tabular-nums">{{ totals.missingCommits }}</div>
           </CardContent>
         </Card>
+      </div>
+
+      <div v-if="rows.length" class="flex flex-wrap items-center gap-4 text-[11px] text-muted-foreground">
+        <span>有效工时 {{ totalEffective.low }}–{{ totalEffective.high }}h</span>
+        <span>下限只认提交，上限叠加活动事件、在岗跨度和模型任务估算</span>
       </div>
 
       <Card v-if="branchActivity.length" class="py-3">
@@ -812,7 +1018,7 @@ function fmtTime(iso: string) {
                 <TableCell class="text-xs tabular-nums">{{ formatDateCN(row.date) }}</TableCell>
                 <TableCell class="text-xs">
                   {{ row.memberName }}
-                  <span v-if="row.memberKey.startsWith('author:')" class="ml-1 text-[10px] text-muted-foreground">
+                  <span v-if="row.memberKey.startsWith('author:') || row.memberKey.startsWith('signal:')" class="ml-1 text-[10px] text-muted-foreground">
                     未匹配到人员
                   </span>
                 </TableCell>
@@ -820,6 +1026,9 @@ function fmtTime(iso: string) {
                   <span v-if="row.commits.length">{{ row.commits.length }}</span>
                   <span v-else-if="row.missingCommits" class="text-amber-600 dark:text-amber-500">无提交</span>
                   <span v-else class="text-muted-foreground">—</span>
+                  <div v-if="row.signals?.length" class="mt-0.5 text-[10px] text-muted-foreground">
+                    {{ row.signals.length }} 条活动
+                  </div>
                 </TableCell>
                 <TableCell class="max-w-[30rem] text-xs">
                   <div v-if="row.commits.length" class="space-y-0.5">
@@ -895,7 +1104,9 @@ function fmtTime(iso: string) {
                       {{ dayInfo(day.date).source === 'weekend' ? '周末' : '休' }}
                     </Badge>
                   </TableCell>
-                  <TableCell class="text-right text-xs tabular-nums">{{ day.commits }}</TableCell>
+                  <TableCell class="text-right text-xs tabular-nums">
+                    {{ day.commits }}<span v-if="day.signals" class="ml-0.5 text-[10px] text-muted-foreground">+{{ day.signals }}</span>
+                  </TableCell>
                   <TableCell class="text-right text-xs tabular-nums">{{ day.people }}</TableCell>
                   <TableCell class="text-right text-xs tabular-nums">
                     +{{ day.additions }} / -{{ day.deletions }}
@@ -938,6 +1149,7 @@ function fmtTime(iso: string) {
                   <TableHead class="w-20 text-right">活跃天数</TableHead>
                   <TableHead class="w-32 text-right">代码量</TableHead>
                   <TableHead class="w-24 text-right">申报工时</TableHead>
+                  <TableHead class="w-28 text-right">有效工时</TableHead>
                   <TableHead class="w-28 text-right">未申报天数</TableHead>
                   <TableHead class="w-32">最近提交</TableHead>
                 </TableRow>
@@ -958,6 +1170,10 @@ function fmtTime(iso: string) {
                   <TableCell class="text-right text-xs tabular-nums">
                     {{ person.hours ? `${person.hours}h` : '—' }}
                   </TableCell>
+                  <TableCell class="text-right text-xs tabular-nums">
+                    <span v-if="person.effectiveHigh">{{ Math.round(person.effectiveLow * 10) / 10 }}–{{ Math.round(person.effectiveHigh * 10) / 10 }}h</span>
+                    <span v-else class="text-muted-foreground">—</span>
+                  </TableCell>
                   <TableCell
                     class="text-right text-xs tabular-nums"
                     :class="person.missingDays ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground'"
@@ -973,6 +1189,15 @@ function fmtTime(iso: string) {
             <MetricLegend title="指标说明" :items="PERSON_LEGEND" />
           </CardContent>
         </Card>
+
+        <EvidenceComparison
+          v-else-if="viewMode === 'evidence'"
+          :projects="selected ? [selected] : []"
+          :commits="evidenceCommits"
+          :reports="evidenceReports"
+          :scope-label="evidenceScope"
+          :gitlab="evidenceGitlab"
+        />
 
         <Card v-else class="gap-0 py-4">
           <CardHeader class="px-4 pb-2">

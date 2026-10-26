@@ -169,6 +169,7 @@ export function mergeSettings(saved: Partial<AppSettings> | null | undefined): A
     rules: { ...base.rules, ...saved.rules },
     retention: { ...base.retention, ...saved.retention },
     analysis: { ...base.analysis, ...saved.analysis },
+    workload: { ...base.workload, ...saved.workload },
     appearance: { ...base.appearance, ...saved.appearance },
     workCalendar: { ...base.workCalendar, ...saved.workCalendar },
     projectMappings: saved.projectMappings ?? base.projectMappings,

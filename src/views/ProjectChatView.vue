@@ -53,6 +53,7 @@ import {
 import { GitLabClient } from '@/core/adapters/gitlab'
 import { resolveMcpServers } from '@/core/agent/toolChat'
 import { createBuiltinTools } from '@/core/agent/builtin'
+import { isDesktop, transport } from '@/core/bridge'
 import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
 import { contextRange, loadProjectContext } from '@/core/engine/projectContext'
 import { useProfileStore } from '@/core/store/profile'
@@ -153,6 +154,7 @@ const statusText = computed(() => {
   const parts = [
     s.profile ? `项目画像${s.modules ? `（${s.modules} 个模块）` : ''}` : '未生成项目画像',
     `最近 ${s.days} 天 ${s.commits} 个提交`,
+    ...(s.signals ? [`${s.signals} 条 MR/评审/Issue 活动`] : []),
     `${s.reportEntries} 条日报`,
   ]
   if (s.repos)
@@ -255,6 +257,24 @@ async function ensureContext(force = false): Promise<ProjectContext | null> {
   buildPromise = (async () => {
     try {
       await profileStore.load(id)
+      /*
+       * codegraph 的 MCP 工具只有在仓库有 `.codegraph/` 索引时才有效。
+       * 会话开始前先确保索引；失败只影响代码工具，不阻塞资料整理。
+       */
+      if (settingsStore.settings.analysis.autoIndex && isDesktop()) {
+        const profile = profileStore.byProject[id]
+        for (const repo of profile?.repos ?? []) {
+          if (!repo.localPath)
+            continue
+          chat.setBuildProgress(id, `正在确保 ${repo.repoPath} 的 codegraph 索引…`)
+          try {
+            await transport().analysisIndex(repo.localPath, settingsStore.settings.analysis.codegraphPath)
+          }
+          catch {
+            // 索引失败时工具会明确提示；这里不打断会话
+          }
+        }
+      }
       const { from, to } = contextRange(DAYS)
       const notes: string[] = []
 
@@ -271,6 +291,7 @@ async function ensureContext(force = false): Promise<ProjectContext | null> {
         reports: Object.values(reportStore.cache).flat(),
         rules: settingsStore.settings.rules,
         gitlab: settingsStore.configured ? new GitLabClient(settingsStore.settings.gitlab) : undefined,
+        useSignals: settingsStore.settings.workload.useSignals,
         days: DAYS,
         notes,
         signal: controller.signal,
