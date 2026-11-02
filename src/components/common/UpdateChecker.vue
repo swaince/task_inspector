@@ -167,6 +167,16 @@ function openPortableDownload() {
   void openExternal('https://github.com/swaince/task_inspector/releases/latest')
 }
 
+/** 版本发布有对应的 tag；main 的滚动发布退回最新 Release 页 */
+function openReleaseNotes() {
+  const version = update.value?.version
+  void openExternal(
+    version
+      ? `https://github.com/swaince/task_inspector/releases/tag/v${version}`
+      : 'https://github.com/swaince/task_inspector/releases/latest',
+  )
+}
+
 async function install() {
   const current = update.value
   if (!current || downloading.value)
@@ -268,11 +278,28 @@ function onOpenChange(open: boolean) {
               </span>
             </div>
 
-            <div
-              v-if="update.body"
-              class="max-h-48 overflow-y-auto rounded-md border bg-muted/30 p-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground"
-            >
-              {{ update.body }}
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-medium text-muted-foreground">更新内容</span>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground hover:no-underline"
+                  @click="openReleaseNotes"
+                >
+                  在 GitHub 查看完整说明
+                  <ExternalLinkIcon :size="11" />
+                </button>
+              </div>
+              <div class="max-h-56 overflow-y-auto rounded-md border bg-muted/30 p-3">
+                <MessageResponse
+                  v-if="update.body"
+                  :content="update.body"
+                  class="text-xs text-muted-foreground! [&_a]:underline! [&_h1]:mt-2! [&_h1]:mb-1! [&_h1]:text-sm! [&_h2]:mt-2! [&_h2]:mb-1! [&_h2]:text-sm! [&_h3]:mt-2! [&_h3]:mb-1! [&_h3]:text-xs! [&_h3]:text-foreground! [&_li]:py-0.5! [&_p]:my-1! [&_ul]:my-1!"
+                />
+                <p v-else class="text-xs text-muted-foreground">
+                  本次更新没有提供详细说明。
+                </p>
+              </div>
             </div>
 
             <div v-if="downloading || phase !== 'idle'" class="space-y-1.5">

@@ -833,6 +833,9 @@ GitHub Actions 工作流在 `.github/workflows/release.yml`，也可以手动触
   `~/.tauri/task-inspector.key`，同时存放在仓库 Secrets，**不要提交到仓库**
 - 发布作业会为 Windows 的 `.nsis.zip`、macOS 的 `.app.tar.gz` 生成 `.sig`，
   并生成 `latest.json`；这些文件和安装包一起挂在 Release 上
+- 更新说明由 `tools/changelog.mjs` 按 Conventional Commits 从上一个版本 tag 生成，
+  写进 `latest.json` 的 `notes` 和 Release 正文；应用内更新弹窗会按 Markdown 展示。
+  本地可以用 `node tools/changelog.mjs --version 0.3.2` 预览
 - 只有版本 tag 的 Release 会标记为 GitHub Latest；main 的滚动 Release 仍然发布，
   但不作为自动更新通道，避免每次推 main 都触发客户端升级
 - 自动更新只覆盖 **NSIS 安装版**和放到 `/Applications` 的 macOS `.app`；

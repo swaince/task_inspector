@@ -160,7 +160,10 @@ jobs:
     needs: [meta, build]
     runs-on: ubuntu-latest
     steps:
+      # 生成 changelog 要读完整历史和版本 tag，浅克隆拿不到
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -171,6 +174,12 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Generate changelog
+        run: >-
+          node tools/changelog.mjs
+          --version "${{ needs.meta.outputs.version }}"
+          --out changelog.md
+
       - name: Generate updater manifest
         run: >-
           node tools/make-latest-json.mjs
@@ -178,6 +187,34 @@ jobs:
           --repo "${{ github.repository }}"
           --tag "${{ needs.meta.outputs.tag }}"
           --dir release-assets
+          --notes-file changelog.md
+
+      - name: Compose release body
+        shell: bash
+        run: |
+          {
+            echo "## 研发工作核查 ${{ needs.meta.outputs.name }}"
+            echo
+            cat changelog.md
+            echo
+            echo "- 提交：\`${{ github.sha }}\`"
+            echo "- 构建记录：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            cat <<'EOF'
+          ### 安装包
+
+          - **Windows**：`*-setup.exe`（NSIS 安装版）、`*.msi`（MSI 安装版）、`*_portable.zip`（免安装，解压后直接运行）
+          - **macOS**：`*.dmg`（通用版，Intel 与 Apple Silicon 通用）、`*_portable.zip`（免安装 `.app`）
+
+          > 安装版启动后会自动检查更新（页头也可以手动检查），更新弹窗里会展示本次更新内容；免安装版不参与自动更新。
+          > 自动更新使用带签名的更新包，签名对不上不会安装。
+
+          > macOS 版本未签名。首次打开请右键 →「打开」；
+          > 若仍被拦截，执行 `xattr -dr com.apple.quarantine /Applications/TaskInspector.app`。
+          >
+          > Windows 免安装版需要系统已安装 WebView2（Windows 11 自带，Windows 10 通常已随 Edge 安装）。
+          EOF
+          } > release-body.md
 
       - name: List release assets
         run: ls -lh release-assets
@@ -203,23 +240,6 @@ jobs:
           prerelease: false
           fail_on_unmatched_files: true
           files: release-assets/**
-          body: |
-            ## 研发工作核查 ${{ needs.meta.outputs.name }}
-
-            - 提交：`${{ github.sha }}`
-            - 构建记录：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            ### 安装包
-
-            - **Windows**：`*-setup.exe`（NSIS 安装版）、`*.msi`（MSI 安装版）、`*_portable.zip`（免安装，解压后直接运行）
-            - **macOS**：`*.dmg`（通用版，Intel 与 Apple Silicon 通用）、`*_portable.zip`（免安装 `.app`）
-
-            > 安装版启动后会自动检查更新（页头也可以手动检查）；免安装版不参与自动更新。
-            > 自动更新使用带签名的更新包，签名对不上不会安装。
-
-            > macOS 版本未签名。首次打开请右键 →「打开」；
-            > 若仍被拦截，执行 `xattr -dr com.apple.quarantine /Applications/TaskInspector.app`。
-            >
-            > Windows 免安装版需要系统已安装 WebView2（Windows 11 自带，Windows 10 通常已随 Edge 安装）。
+          body_path: release-body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -20,10 +20,18 @@ const version = arg('version')
 const repo = arg('repo')
 const tag = arg('tag')
 const dir = arg('dir', 'release-assets')
-const notes = arg('notes', '本次更新包含功能与体验改进。')
+const notesFile = arg('notes-file')
+const notes = notesFile
+  ? readFileSync(notesFile, 'utf8').trim()
+  : arg('notes', '本次更新包含功能与体验改进。')
 
 if (!version || !repo || !tag) {
-  console.error('用法: make-latest-json.mjs --version <ver> --repo <owner/repo> --tag <tag> --dir <dir>')
+  console.error('用法: make-latest-json.mjs --version <ver> --repo <owner/repo> --tag <tag> --dir <dir> [--notes <text> | --notes-file <path>]')
+  process.exit(1)
+}
+
+if (!notes) {
+  console.error('更新说明为空：请检查 --notes 或 --notes-file')
   process.exit(1)
 }
 
