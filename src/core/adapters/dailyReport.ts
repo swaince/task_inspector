@@ -501,9 +501,19 @@ export class HttpDailyReportSource implements DailyReportSource {
 
   private mapReport(item: unknown, fallbackDate: string, index: number): DailyReport {
     const f = this.cfg.fieldMap
+    const memberId = asString(pick(item, f.memberIdPath)) || `row-${index}`
+    const memberName = asString(pick(item, f.memberNamePath)) || memberId
+    /*
+     * 区间查询时 fallbackDate 是空串；如果条目 id 继续用它，同一个人
+     * 在不同日期的第 0 条会得到同一个 id（如 u1--0），写库时触发
+     * 主键冲突，表现成「整段日期全部写入失败」。所以先用日志自己的
+     * 日期构造 id，取不到时才退回 fallback。
+     */
+    const reportDate = normalizeDate(asString(pick(item, f.datePath))) || fallbackDate
+
     const rawEntries = pick(item, f.entriesPath)
     const entries: DailyReportEntry[] = (Array.isArray(rawEntries) ? rawEntries : []).map((e, i) => ({
-      id: `${asString(pick(item, f.memberIdPath)) || 'unknown'}-${fallbackDate}-${i}`,
+      id: `${memberId}-${reportDate || 'unknown'}-${i}`,
       projectName: asString(pick(e, f.entryProjectNamePath)) || '未填写项目',
       projectCode: asString(pick(e, f.entryProjectCodePath)) || undefined,
       hours: this.hoursOf(pick(e, f.entryHoursPath)),
@@ -516,12 +526,9 @@ export class HttpDailyReportSource implements DailyReportSource {
       taskRefs: asStringArray(pick(e, f.entryTaskRefsPath)),
     }))
 
-    const memberId = asString(pick(item, f.memberIdPath)) || `row-${index}`
-    const memberName = asString(pick(item, f.memberNamePath)) || memberId
-
     return {
-      id: `${memberId}@${asString(pick(item, f.datePath)) || fallbackDate}`,
-      date: normalizeDate(asString(pick(item, f.datePath))) || fallbackDate,
+      id: `${memberId}@${reportDate}`,
+      date: reportDate,
       memberId,
       memberName,
       entries,

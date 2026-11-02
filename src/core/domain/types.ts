@@ -89,6 +89,8 @@ export interface DailyReport {
   /** 工时合计，便于校验日报是否填满工作日 */
   totalHours: number
   submittedAt?: string
+  /** 这条日报最后一次写入本地库的时间（同步时间，不是员工提交时间） */
+  syncedAt?: string
 }
 
 /* ------------------------------------------------------------------ *

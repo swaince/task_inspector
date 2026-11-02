@@ -12,6 +12,7 @@ import type {
   InspectionFilter,
   LlmChatRequest,
   LlmStreamEvent,
+  ReportSyncState,
   Transport,
 } from './types'
 import { buildLlmRequest, parseLlmStream } from './protocol'
@@ -28,6 +29,8 @@ import { buildLlmRequest, parseLlmStream } from './protocol'
 
 const KEY_SETTINGS = 'ti:db:settings'
 const KEY_REPORTS = 'ti:db:reports'
+const KEY_REPORT_SYNC = 'ti:db:report-sync'
+const KEY_ACTIVITY_HISTORY = 'ti:db:activity-history'
 const KEY_INSPECTIONS = 'ti:db:inspections'
 const KEY_PROJECTS = 'ti:db:projects'
 const KEY_MEMBERS = 'ti:db:members'
@@ -165,6 +168,104 @@ export function createWebTransport(): Transport {
       all[date] = reports
       writeJson(KEY_REPORTS, all)
       return reports.length
+    },
+
+    async reportsUpsertMember(date, memberId, reports) {
+      const all = loadReports()
+      const rest = (all[date] ?? []).filter(report => report.memberId !== memberId)
+      all[date] = reports === null ? rest : [...rest, ...reports]
+      writeJson(KEY_REPORTS, all)
+      return all[date].length
+    },
+
+    async reportsSyncState() {
+      return readJson<ReportSyncState>(KEY_REPORT_SYNC, {
+        lastIncrementalAt: null,
+        lastIncrementalFrom: null,
+        lastIncrementalTo: null,
+        lastFullAt: null,
+        lastFullFrom: null,
+        lastFullTo: null,
+      })
+    },
+
+    async reportsSetSyncState(state) {
+      writeJson(KEY_REPORT_SYNC, state)
+    },
+
+    async activityAnalysesUpsert(payload) {
+      const record = JSON.parse(payload) as Record<string, unknown>
+      const list = readJson<Array<Record<string, unknown>>>(KEY_ACTIVITY_HISTORY, [])
+      const rest = list.filter(item =>
+        !(item.kind === record.kind
+          && item.scopeId === record.scopeId
+          && item.from === record.from
+          && item.to === record.to),
+      )
+      rest.push(record)
+      writeJson(KEY_ACTIVITY_HISTORY, rest)
+    },
+
+    async activityAnalysesList(kind) {
+      const list = readJson<Array<Record<string, unknown>>>(KEY_ACTIVITY_HISTORY, [])
+      const summaries = list
+        .filter(item => !kind || item.kind === kind)
+        .sort((a, b) => String(b.analyzedAt).localeCompare(String(a.analyzedAt)))
+        .map(({ payload: _payload, ...rest }) => rest)
+      return JSON.stringify(summaries)
+    },
+
+    async activityAnalysesGet(id) {
+      const list = readJson<Array<Record<string, unknown>>>(KEY_ACTIVITY_HISTORY, [])
+      const hit = list.find(item => item.id === id)
+      return hit ? String(hit.payload ?? '') : null
+    },
+
+    async activityAnalysesUpdatePayload(id, payload) {
+      const list = readJson<Array<Record<string, unknown>>>(KEY_ACTIVITY_HISTORY, [])
+      const hit = list.find(item => item.id === id)
+      if (hit)
+        hit.payload = payload
+      writeJson(KEY_ACTIVITY_HISTORY, list)
+    },
+
+    async activityAnalysesMarkStale(dates, reason) {
+      const wanted = new Set(dates)
+      const list = readJson<Array<Record<string, unknown>>>(KEY_ACTIVITY_HISTORY, [])
+      let marked = 0
+      for (const item of list) {
+        if (item.stale || !dates.length)
+          continue
+        const from = String(item.from ?? '')
+        const to = String(item.to ?? '')
+        if (![...wanted].some(date => from <= date && to >= date))
+          continue
+        item.stale = true
+        item.staleReason = reason
+        item.staleAt = new Date().toISOString()
+        marked++
+      }
+      writeJson(KEY_ACTIVITY_HISTORY, list)
+      return marked
+    },
+
+    async activityAnalysesDelete(id) {
+      const list = readJson<Array<Record<string, unknown>>>(KEY_ACTIVITY_HISTORY, [])
+      writeJson(KEY_ACTIVITY_HISTORY, list.filter(item => item.id !== id))
+    },
+
+    async activityAnalysesClear() {
+      writeJson(KEY_ACTIVITY_HISTORY, [])
+    },
+
+    async activityAnalysesPrune(keepDays) {
+      if (keepDays <= 0)
+        return 0
+      const cutoff = new Date(Date.now() - keepDays * 86_400_000).toISOString().slice(0, 10)
+      const list = readJson<Array<Record<string, unknown>>>(KEY_ACTIVITY_HISTORY, [])
+      const kept = list.filter(item => String(item.analyzedAt).slice(0, 10) >= cutoff)
+      writeJson(KEY_ACTIVITY_HISTORY, kept)
+      return list.length - kept.length
     },
 
     async reportsByDate(date) {

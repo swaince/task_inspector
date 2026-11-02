@@ -25,6 +25,10 @@ export interface EvidenceReportEntry {
   memberName: string
   content: string
   hours: number
+  /** 日报的滑动核对窗口 */
+  windowFrom?: string
+  windowTo?: string
+  windowCommits?: number
 }
 
 export interface EvidenceInput {
@@ -206,7 +210,10 @@ function commitLine(commit: GitCommit) {
 }
 
 function reportLine(entry: EvidenceReportEntry) {
-  return `- ${formatDateCN(entry.date)} ${entry.memberName}（${entry.hours}h）：${clip(entry.content, 200)}`
+  const window = entry.windowFrom
+    ? `；检查窗口 ${entry.windowFrom} ~ ${entry.windowTo}，窗口内提交 ${entry.windowCommits ?? 0} 条`
+    : ''
+  return `- ${formatDateCN(entry.date)} ${entry.memberName}（${entry.hours}h）：${clip(entry.content, 200)}${window}`
 }
 
 function fallbackMarkdown(input: EvidenceInput, states: EvidenceRepoState[], failures: string[]) {

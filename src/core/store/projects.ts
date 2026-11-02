@@ -1,7 +1,10 @@
 import type { Project } from '../domain/types'
 import type { GitLabProjectInput, ProjectSyncOutcome } from '../bridge/types'
 import type { LogSystemProject } from '../adapters/dailyReport'
+import type { GitLabClient } from '../adapters/gitlab'
+import type { GitLabSettings } from '../config/settings'
 import { transport } from '../bridge'
+import { resolveProjectLinks } from '../adapters/projectLinks'
 import { projectMatches } from '../engine/matching'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
@@ -123,6 +126,61 @@ export const useProjectStore = defineStore('projects', () => {
       items.value = [...items.value, next].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
     else
       items.value = items.value.map(p => (p.id === next.id ? next : p))
+  }
+
+  /**
+   * 分析前刷新项目的仓库列表。
+   *
+   * 用户关联的是 GitLab 组时，组里新增仓库不会自动出现在本地 repos 缓存里；
+   * 不重新解析就会一直按上次的仓库清单扫，新仓库的提交永远看不到。
+   * 部分关联解析失败时保留旧仓库并合并成功的新结果，避免一次网络问题把仓库清空。
+   */
+  async function refreshLinks(
+    project: Project,
+    gitlab: GitLabClient,
+    settings: GitLabSettings,
+  ): Promise<{ project: Project, failures: string[], changed: boolean }> {
+    if (!project.links?.length)
+      return { project, failures: [], changed: false }
+
+    const result = await resolveProjectLinks(gitlab, project.links, {
+      perPage: settings.perPage,
+      maxProjects: settings.maxProjects,
+    })
+    if (!result.repos.length) {
+      return {
+        project,
+        failures: result.failures.length ? result.failures : ['GitLab 关联没有解析出任何仓库'],
+        changed: false,
+      }
+    }
+
+    const repos = result.failures.length
+      ? mergeRepos(project.repos ?? [], result.repos)
+      : result.repos
+    const changed = JSON.stringify(repos) !== JSON.stringify(project.repos ?? [])
+      || result.failures.length > 0
+    if (!changed)
+      return { project, failures: result.failures, changed: false }
+
+    const updated: Project = {
+      ...project,
+      repos,
+      syncStatus: result.failures.length ? 'error' : 'synced',
+      syncError: result.failures.length ? result.failures[0] : undefined,
+      syncedAt: new Date().toISOString(),
+    }
+    await save(updated)
+    return { project: updated, failures: result.failures, changed: true }
+  }
+
+  function mergeRepos(oldRepos: Project['repos'], newRepos: Project['repos']) {
+    const byId = new Map<number, NonNullable<Project['repos']>[number]>()
+    for (const repo of oldRepos ?? [])
+      byId.set(repo.id, repo)
+    for (const repo of newRepos ?? [])
+      byId.set(repo.id, repo)
+    return [...byId.values()]
   }
 
   async function remove(id: string) {
@@ -313,6 +371,7 @@ export const useProjectStore = defineStore('projects', () => {
     usageOf,
     load,
     save,
+    refreshLinks,
     remove,
     setFollowedMany,
     removeMany,

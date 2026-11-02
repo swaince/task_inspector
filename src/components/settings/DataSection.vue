@@ -5,18 +5,16 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
 import { isDesktop, transport } from '@/core/bridge'
 import { mergeSettings } from '@/core/config/merge'
-import { useHistoryStore } from '@/core/store/history'
+import { useActivityHistoryStore } from '@/core/store/activityHistory'
 import { useReportStore } from '@/core/store/reports'
 import { useSettingsStore } from '@/core/store/settings'
 
 const settingsStore = useSettingsStore()
-const historyStore = useHistoryStore()
+const activityHistory = useActivityHistoryStore()
 const reportStore = useReportStore()
 
 const copied = ref(false)
@@ -25,13 +23,9 @@ const importError = ref<string | null>(null)
 
 const storageHint = computed(() =>
   isDesktop()
-    ? '数据保存在本机的应用数据目录下：配置为 config/settings.json，检查历史为 data/inspections/。不会上传到任何服务器。'
+    ? '数据保存在本机的应用数据目录下：配置为 config/settings.json，分析历史为 data/activity/。不会上传到任何服务器。'
     : '当前是浏览器预览模式，数据存在 localStorage 里。打包成桌面应用后会改为本机文件存储。',
 )
-
-async function save() {
-  await settingsStore.save()
-}
 
 /**
  * 配置导入导出。
@@ -71,7 +65,7 @@ function askReset(mode: 'history' | 'reports' | 'business' | 'all') {
 }
 
 const confirmTitle = computed(() => ({
-  history: '清空检查历史？',
+  history: '清空分析历史？',
   reports: '清空日报数据？',
   business: '清空业务数据？',
   all: '全部重置？',
@@ -86,7 +80,7 @@ const confirmTitle = computed(() => ({
  */
 async function doReset() {
   if (pendingMode.value === 'history') {
-    await historyStore.clear()
+    await activityHistory.clear()
     confirmOpen.value = false
     return
   }
@@ -119,27 +113,15 @@ async function doReset() {
     </CardHeader>
 
     <CardContent class="space-y-4 px-4">
-      <div class="grid gap-3 sm:grid-cols-2">
-        <div class="space-y-1">
-          <Label for="d-keep" class="text-[11px] text-muted-foreground">
-            检查历史保留天数（0 表示永久保留）
-          </Label>
-          <Input
-            id="d-keep"
-            :model-value="settingsStore.settings.retention.keepDays"
-            type="number"
-            min="0"
-            @update:model-value="v => { settingsStore.settings.retention.keepDays = Math.max(0, Number(v) || 0); save() }"
-          />
-          <p class="text-[11px] text-muted-foreground">
-            超期记录会在应用启动时自动清理
-          </p>
-        </div>
-
-        <div class="flex items-end gap-2">
-          <Button variant="outline" size="sm" :disabled="!historyStore.results.length" @click="askReset('history')">
+      <div class="space-y-3">
+        <p class="text-[11px] leading-relaxed text-muted-foreground">
+          分析历史与本地日志一起保留，不会按天数自动过期；只有手动清空分析历史、
+          清空日报数据或全部重置时才会删除。
+        </p>
+        <div class="flex flex-wrap items-end gap-2">
+          <Button variant="outline" size="sm" :disabled="!activityHistory.items.length" @click="askReset('history')">
             <Trash2Icon :size="13" class="mr-1.5" />
-            清空检查历史（{{ historyStore.results.length }}）
+            清空分析历史（{{ activityHistory.items.length }}）
           </Button>
           <Button variant="outline" size="sm" :disabled="!reportStore.totalReports" @click="askReset('reports')">
             <Trash2Icon :size="13" class="mr-1.5" />
@@ -199,7 +181,7 @@ async function doReset() {
           重置数据
         </div>
         <p class="text-[11px] leading-relaxed text-muted-foreground">
-          「只清业务数据」会清空日报、检查历史、提交缓存、项目和人员，配置保留；
+          「只清业务数据」会清空日报、分析历史、提交缓存、项目和人员，配置保留；
           「全部重置」连 GitLab / 日报系统 / 模型 / LDAP 配置一起清，等于重新装一遍。
           清空后无法撤销，动手前建议先「复制当前配置」备一份。
         </p>
@@ -221,7 +203,7 @@ async function doReset() {
         </DialogHeader>
         <p class="text-sm leading-relaxed text-muted-foreground">
           <template v-if="pendingMode === 'all'">
-            日报、检查历史、提交缓存、项目、人员，以及 GitLab / 日报系统 / 模型 / LDAP 的全部配置都会被清空，
+            日报、分析历史、提交缓存、项目、人员，以及 GitLab / 日报系统 / 模型 / LDAP 的全部配置都会被清空，
             应用回到刚安装的状态，需要重新配置。
           </template>
           <template v-else-if="pendingMode === 'history'">
@@ -231,7 +213,7 @@ async function doReset() {
             本地保存的日报快照会被删除；重新同步可以从源系统再拉取。
           </template>
           <template v-else>
-            日报、检查历史、提交缓存、项目、人员都会被清空；GitLab / 日报 / 模型 / LDAP 的配置保留。
+            日报、分析历史、提交缓存、项目、人员都会被清空；GitLab / 日报 / 模型 / LDAP 的配置保留。
           </template>
           <strong class="font-medium text-foreground">无法撤销。</strong>
         </p>

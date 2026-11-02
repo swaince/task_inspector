@@ -2,7 +2,7 @@
 import type { GitLabClient } from '@/core/adapters/gitlab'
 import type { GitCommit, Project } from '@/core/domain/types'
 import type { EvidenceReportEntry } from '@/core/engine/codeEvidence'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { AlertTriangleIcon, Loader2Icon, ScanSearchIcon } from '@lucide/vue'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -26,6 +26,12 @@ const props = defineProps<{
   reports: EvidenceReportEntry[]
   scopeLabel: string
   gitlab?: GitLabClient | null
+  /** 上一次生成并保存的申报对照结果 */
+  initial?: string
+}>()
+
+const emit = defineEmits<{
+  result: [markdown: string]
 }>()
 
 const settingsStore = useSettingsStore()
@@ -33,10 +39,15 @@ const profileStore = useProfileStore()
 const running = ref(false)
 const progress = ref('')
 const error = ref<string | null>(null)
-const markdown = ref('')
+const markdown = ref(props.initial ?? '')
 const usedCodegraph = ref(false)
 const repoNotes = ref<string[]>([])
 const failures = ref<string[]>([])
+
+watch(() => props.initial, (value) => {
+  if (value && value !== markdown.value)
+    markdown.value = value
+})
 
 const canRun = computed(() =>
   Boolean(props.commits.length || props.reports.length) && !running.value,
@@ -70,6 +81,7 @@ async function run() {
     })
     markdown.value = result.markdown
     usedCodegraph.value = result.usedCodegraph
+    emit('result', result.markdown)
     failures.value = result.failures
     repoNotes.value = result.repos.map(repo =>
       `${repo.path}${repo.action ? `：索引 ${repo.action}` : repo.error ? `：${repo.error}` : ''}`,

@@ -3,7 +3,7 @@ import type { ActivityRow as Row } from '@/core/store/activity'
 import type { GitCommit, WorkSignal } from '@/core/domain/types'
 import type { ActivityFailure, ProjectCommits } from '@/core/engine/activity'
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { AlertTriangleIcon, ChevronRightIcon, Loader2Icon, PlayIcon, RefreshCwIcon, SparklesIcon } from '@lucide/vue'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -16,6 +16,8 @@ import StructuredReport from '@/components/activity/StructuredReport.vue'
 import DailyCharts from '@/components/activity/DailyCharts.vue'
 import PersonContribution from '@/components/activity/PersonContribution.vue'
 import EvidenceComparison from '@/components/activity/EvidenceComparison.vue'
+import ActivityHistoryPanel from '@/components/activity/ActivityHistoryPanel.vue'
+import WindowDetailDialog from '@/components/activity/WindowDetailDialog.vue'
 import CommitInspectorDialog from '@/components/inspection/CommitInspectorDialog.vue'
 import ProjectPicker from '@/components/common/ProjectPicker.vue'
 import MetricLegend from '@/components/common/MetricLegend.vue'
@@ -24,11 +26,13 @@ import { useWorkCalendar } from '@/core/calendar/useWorkCalendar'
 import { buildIdentities, collectProjectCommits, commitOwner, signalOwner } from '@/core/engine/activity'
 import { projectMatches, toProjectRefs } from '@/core/engine/matching'
 import { assignCommitDate, dateRange } from '@/core/engine/window'
+import { expandRangeForWindow, monthBounds, reportCheckWindow } from '@/core/engine/reportWindow'
 import { memberDayMetrics } from '@/core/engine/metrics'
 import { estimateEffortBatch } from '@/core/engine/effort'
 import type { EffortDayInput } from '@/core/engine/effort'
 import { createLlmClient } from '@/core/llm/client'
 import { useActivityStore } from '@/core/store/activity'
+import { useActivityHistoryStore } from '@/core/store/activityHistory'
 import { useMemberStore } from '@/core/store/members'
 import { useProjectStore } from '@/core/store/projects'
 import { useReportStore } from '@/core/store/reports'
@@ -51,6 +55,7 @@ const TABS = [
   { key: 'day', label: '按天' },
   { key: 'person', label: '按人' },
   { key: 'evidence', label: '申报对照' },
+  { key: 'history', label: '分析历史' },
   { key: 'report', label: '分析报告' },
 ] as const
 
@@ -103,6 +108,7 @@ const scannedAt = ref<string | null>(null)
 const liveFailed = ref<string | null>(null)
 
 const activityStore = useActivityStore()
+const activityHistory = useActivityHistoryStore()
 const viewMode = ref<ViewMode>('rows')
 
 /** 点开的提交。diff 逐条拉一次请求，所以不在扫描阶段预先取 */
@@ -186,11 +192,27 @@ const evidenceReports = computed(() =>
       memberName: row.memberName,
       content: row.contents.join('；'),
       hours: row.hours,
+      windowFrom: row.windowFrom,
+      windowTo: row.windowTo,
+      windowCommits: row.windowCommits,
     })),
 )
 const evidenceGitlab = computed(() =>
   settingsStore.configured ? new GitLabClient(settingsStore.settings.gitlab) : null,
 )
+const windowOpen = ref(false)
+const windowRow = ref<Row | null>(null)
+
+function openWindow(row: Row) {
+  windowRow.value = row
+  windowOpen.value = true
+}
+
+function shortRange(from?: string, to?: string) {
+  if (!from || !to)
+    return '—'
+  return `${from.slice(5)} ~ ${to.slice(5)}`
+}
 const evidenceScope = computed(() => `${formatDateCN(from.value)} ~ ${formatDateCN(to.value)}`)
 
 /** 区间内有提交的分支：避免只看到默认分支，误判别的分支没干活 */
@@ -437,6 +459,17 @@ function buildReportPrompt(): string {
     `${p.name}${p.unmatched ? '（未匹配到人员）' : ''}：提交 ${p.commits} 条（${p.signals} 条活动），活跃 ${p.activeDays} 天，`
     + `+${p.additions}/-${p.deletions}，申报 ${p.hours}h，有提交未申报 ${p.missingDays} 天`,
   )
+  /*
+   * 日报核对窗口：当天没提交不代表没工作，功能分支可能过几天才提交。
+   * 把窗口和窗口内提交数交给模型，避免它只看当天就写「无提交」。
+   */
+  const windowLines = rows.value
+    .filter(row => row.reported && row.windowFrom)
+    .slice(0, 120)
+    .map(row =>
+      `${formatDateCN(row.date)} ${row.memberName}：检查窗口 ${formatDateCN(row.windowFrom!)} ~ ${formatDateCN(row.windowTo!)}，`
+      + `窗口内提交 ${row.windowCommits ?? 0} 条${row.commits.length ? '' : '（当天没有提交）'}`,
+    )
   const recent = rows.value
     .flatMap(r => r.commits.map(c => {
       const branches = c.branches?.length ? ` [分支 ${c.branches.join('、')}]` : ''
@@ -482,6 +515,7 @@ function buildReportPrompt(): string {
     + `会议、答疑等没有系统痕迹的工作不强行计入，数值是区间，不是精确工时。\n\n`
     + `按天：\n${dayLines.join('\n') || '（无）'}\n\n`
     + `按人：\n${personLines.join('\n') || '（无）'}\n\n`
+    + `日报检查窗口：\n${windowLines.join('\n') || '（无）'}\n\n`
     + `分支活动：\n${branchLines.join('\n') || '（无分支信息）'}\n\n`
     + `MR / 评审 / Issue 活动：\n${signalLines.join('\n') || '（无）'}\n\n`
     + `日报申报内容：\n${declared.join('\n') || '（无）'}\n\n`
@@ -489,6 +523,8 @@ function buildReportPrompt(): string {
     + `每日序列（含无记录的天）：\n${chartDays.join('\n') || '（无）'}\n\n`
     + `统计范围覆盖区间内有提交的所有分支，不是只看默认分支。写结论时必须区分「哪个分支做了什么」，`
     + `不能把多分支的工作混成一句「有提交」。\n`
+    + `判断「有申报无提交」时，以「日报检查窗口」和「日报申报内容」为准：窗口内只要有提交，就不能写成没提交；`
+    + `只有窗口内也没有提交时，才按非编码工作或无法自证处理。\n`
     + `判断「有申报无提交」的日子时，以「日报申报内容」为准：里面写了需求文档、架构设计、评审、`
     + `会议、答疑这类工作，就属于非编码工作，不要笼统写成「未提供工作内容」。\n`
     + `周末和法定节假日没有提交、没有日报是正常的，不要写成漏报或缺勤；活跃天数、未申报记录都只按工作日判断。\n\n`
@@ -531,8 +567,17 @@ async function generateReport() {
       { role: 'user', content: buildReportPrompt() },
     ])
     const snap = activityStore.snapshot
-    if (snap)
-      activityStore.save({ ...snap, report: completion.text.trim(), reportAt: new Date().toISOString() })
+    if (snap) {
+      const next = { ...snap, report: completion.text.trim(), reportAt: new Date().toISOString() }
+      activityStore.save(next)
+      // AI 报告也要进分析历史，不能只留在内存里
+      try {
+        await activityHistory.updateProjectArtifacts(next, selected.value?.name ?? next.projectId)
+      }
+      catch {
+        // 历史写入失败不影响当前报告展示
+      }
+    }
     viewMode.value = 'report'
   }
   catch (err) {
@@ -541,6 +586,47 @@ async function generateReport() {
   finally {
     activityStore.generatingReport = false
   }
+}
+
+async function saveEvidence(markdown: string) {
+  const snap = activityStore.snapshot
+  if (!snap)
+    return
+  const next = { ...snap, evidence: markdown }
+  activityStore.save(next)
+  try {
+    await activityHistory.updateProjectArtifacts(next, selected.value?.name ?? next.projectId)
+  }
+  catch {
+    // 历史写入失败不影响当前展示
+  }
+}
+
+async function rerunHistory(item: { scopeId: string, from: string, to: string }) {
+  projectId.value = item.scopeId
+  from.value = item.from
+  to.value = item.to
+  viewMode.value = 'day'
+  await load()
+}
+
+async function openHistory(id: string) {
+  const payload = await activityHistory.get(id)
+  if (!payload || payload.kind !== 'project')
+    return
+  const snapshot = payload.snapshot
+  projectId.value = snapshot.projectId
+  from.value = snapshot.from
+  to.value = snapshot.to
+  rows.value = snapshot.rows
+  failures.value = snapshot.failures
+  liveFailed.value = snapshot.liveFailed
+  scannedAt.value = new Date(payload.analyzedAt).toLocaleTimeString()
+  llmEffort.value = new Map(Object.entries(snapshot.effort?.byMemberDate ?? {}))
+  effortNote.value = snapshot.effort?.note ?? null
+  effortConfidence.value = snapshot.effort?.confidence ?? null
+  activityStore.save(snapshot)
+  viewMode.value = 'day'
 }
 
 onMounted(async () => {
@@ -575,8 +661,8 @@ async function load() {
     return
   }
 
-  const refs = toProjectRefs(project)
-  if (!refs.length) {
+  const refsBefore = toProjectRefs(project)
+  if (!refsBefore.length && !project.links?.length) {
     error.value = `项目「${project.name}」还没有关联到任何仓库。到「项目」面板加上仓库或组，然后点「解析关联仓库」`
     return
   }
@@ -603,16 +689,38 @@ async function load() {
 
   try {
     await reportStore.load()
-    // 日报会被补写：每次扫描都直接问源系统要这一段的最新版本，
-    // 本地那份只当拉取失败时的兜底
-    progress.value = '正在拉取最新日报…'
-    const live = await reportStore.refreshRange(from.value, to.value)
-    liveFailed.value = live.ok ? null : (live.error ?? '未知原因')
+    /*
+     * 直接用本地已同步的日报，不再每次分析都实时拉取：
+     * 日志服务器承载有限，频繁打开活动页会把压力打满。
+     * 需要最新数据时到「日志」页做增量/全量同步。
+     */
+    progress.value = '正在使用本地已同步日志…'
 
     progress.value = '正在扫描仓库…'
 
     const settings = settingsStore.settings
-    const { batches, failures: failed } = await collectProjectCommits(refs, from.value, to.value, {
+    let activeProject = project
+    const refreshFailures: ActivityFailure[] = []
+    if (project.links?.length && settings.gitlab.baseUrl.trim() && settings.gitlab.token.trim()) {
+      progress.value = '正在刷新仓库列表…'
+      const refreshed = await projectStore.refreshLinks(
+        project,
+        new GitLabClient(settings.gitlab),
+        settings.gitlab,
+      )
+      activeProject = refreshed.project
+      for (const failure of refreshed.failures)
+        refreshFailures.push({ projectPath: project.name, message: `仓库列表刷新失败：${failure}` })
+    }
+
+    const refs = toProjectRefs(activeProject)
+    if (!refs.length)
+      throw new Error(`项目「${project.name}」的 GitLab 关联没有解析出仓库，请检查关联和 Token 权限`)
+
+    const offset = settings.rules.reportWindowOffsetWorkdays ?? 2
+    const expanded = expandRangeForWindow(from.value, to.value, offset)
+    const assignRange = dateRange(expanded.from, expanded.to)
+    const { batches, failures: failed } = await collectProjectCommits(refs, expanded.from, expanded.to, {
       gitlab: new GitLabClient(settings.gitlab),
       rules: settings.rules,
       perPage: settings.gitlab.perPage,
@@ -620,9 +728,9 @@ async function load() {
       fetchSignals: settings.workload.useSignals,
       onProgress: p => (progress.value = p.message),
     })
-    failures.value = failed
+    failures.value = [...refreshFailures, ...failed]
 
-    rows.value = buildRows(batches, range)
+    rows.value = buildRows(batches, range, assignRange)
 
     if (settings.workload.useLlmEffort) {
       progress.value = '正在按任务估算工作量…'
@@ -633,7 +741,7 @@ async function load() {
 
     // 同一个项目 + 区间重扫时保留已有报告，否则清空（报告讲的是另一段数据）
     const previous = activityStore.take(projectId.value, from.value, to.value)
-    activityStore.save({
+    const snapshot = {
       projectId: projectId.value,
       from: from.value,
       to: to.value,
@@ -649,7 +757,19 @@ async function load() {
       liveFailed: liveFailed.value,
       report: previous?.report ?? '',
       reportAt: previous?.reportAt ?? null,
-    })
+    }
+    activityStore.save(snapshot)
+
+    try {
+      await activityHistory.saveProject(snapshot, {
+        projectName: project.name,
+        effectiveLow: totalEffective.value.low,
+        effectiveHigh: totalEffective.value.high,
+      })
+    }
+    catch {
+      // 历史写入失败不影响本次扫描结果展示
+    }
   }
   catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -668,10 +788,11 @@ async function load() {
  * 匹配不上人员实体的提交（外包、机器人、还没建实体）单独成行，不并进别人那里——
  * 并错比漏掉更难发现。
  */
-function buildRows(batches: ProjectCommits[], range: string[]): Row[] {
+function buildRows(batches: ProjectCommits[], displayRange: string[], assignRange: string[]): Row[] {
   const rules = settingsStore.settings.rules
   const identities = buildIdentities(memberStore.items)
   const map = new Map<string, Row>()
+  const offset = rules.reportWindowOffsetWorkdays ?? 2
 
   const keyOf = (date: string, memberKey: string) => `${date}|${memberKey}`
   const ensure = (date: string, memberKey: string, memberName: string): Row => {
@@ -697,7 +818,7 @@ function buildRows(batches: ProjectCommits[], range: string[]): Row[] {
 
   for (const batch of batches) {
     for (const commit of batch.commits) {
-      const date = assignCommitDate(commit.authoredDate, range, rules)
+      const date = assignCommitDate(commit.authoredDate, assignRange, rules)
       if (!date)
         continue
       const owner = commitOwner(commit, identities)
@@ -707,7 +828,7 @@ function buildRows(batches: ProjectCommits[], range: string[]): Row[] {
     }
 
     for (const signal of batch.signals ?? []) {
-      const date = assignCommitDate(signal.at, range, rules)
+      const date = assignCommitDate(signal.at, assignRange, rules)
       if (!date)
         continue
       const owner = signalOwner(signal, identities)
@@ -719,7 +840,7 @@ function buildRows(batches: ProjectCommits[], range: string[]): Row[] {
     }
   }
 
-  for (const date of range) {
+  for (const date of displayRange) {
     for (const report of reportStore.cache[date] ?? []) {
       const entries = report.entries.filter(e => matchReportEntry(e))
       if (!entries.length)
@@ -731,16 +852,45 @@ function buildRows(batches: ProjectCommits[], range: string[]): Row[] {
     }
   }
 
+  // 窗口内提交数：按「人员 + 日期」先建索引，再把日报的检查窗口叠加起来
+  const commitList = new Map<string, GitCommit[]>()
   for (const row of map.values()) {
+    if (row.commits.length)
+      commitList.set(keyOf(row.date, row.memberKey), row.commits)
+  }
+  for (const row of map.values()) {
+    if (row.reported) {
+      // 窗口可以跨出分析范围，但不能跨出日报所在的自然月
+      const win = reportCheckWindow(row.date, offset, isWorkday, monthBounds(row.date))
+      row.windowFrom = win.from
+      row.windowTo = win.to
+      row.windowDates = win.dates
+      row.windowCommitList = win.dates.flatMap(date => commitList.get(keyOf(date, row.memberKey)) ?? [])
+      row.windowCommits = row.windowCommitList.length
+      row.windowLogs = win.dates
+        .map((date) => {
+          const content = (reportStore.cache[date] ?? [])
+            .filter(report => report.memberId === row.memberKey)
+            .flatMap(report => report.entries.filter(entry => matchReportEntry(entry)))
+            .map(entry => entry.content)
+            .filter(Boolean)
+            .join('；')
+          return { date, content }
+        })
+        .filter(log => log.content)
+    }
     const active = row.commits.length > 0 || (row.signals?.length ?? 0) > 0
     // 节假日没有提交/日报是正常的，不算漏报；只有工作日才标记
     row.missingInReport = isWorkday(row.date) && active && !row.reported
-    row.missingCommits = isWorkday(row.date) && row.reported && !active
+    row.missingCommits = row.reported && (row.windowCommits ?? 0) === 0
   }
 
-  return [...map.values()].sort((a, b) =>
-    b.date.localeCompare(a.date) || a.memberName.localeCompare(b.memberName, 'zh-Hans-CN'),
-  )
+  const visible = new Set(displayRange)
+  return [...map.values()]
+    .filter(row => visible.has(row.date))
+    .sort((a, b) =>
+      b.date.localeCompare(a.date) || a.memberName.localeCompare(b.memberName, 'zh-Hans-CN'),
+    )
 }
 
 function matchReportEntry(entry: { projectName: string, projectCode?: string }) {
@@ -865,6 +1015,14 @@ function fmtTime(iso: string) {
               查这段时间
             </Button>
           </div>
+
+          <p class="text-[11px] text-muted-foreground">
+            申报数据来自本地已同步日志，分析时不会请求日志中心；需要最新内容请先到「日志」页同步。
+            当前核对窗口：±{{ settingsStore.settings.rules.reportWindowOffsetWorkdays ?? 2 }} 个工作日
+            （<RouterLink :to="{ name: 'settings', query: { tab: 'rules' } }" class="underline underline-offset-2">
+              调整
+            </RouterLink>）。
+          </p>
 
           <details class="text-[11px] text-muted-foreground">
             <summary class="cursor-pointer select-none">
@@ -1002,6 +1160,7 @@ function fmtTime(iso: string) {
                 <TableHead class="w-24">日期</TableHead>
                 <TableHead class="w-32">人员</TableHead>
                 <TableHead class="w-20 text-right">提交</TableHead>
+                <TableHead class="w-32">核对窗口</TableHead>
                 <TableHead class="max-w-[30rem]">提交内容</TableHead>
                 <TableHead class="w-24 text-right">申报工时</TableHead>
                 <TableHead class="max-w-[24rem]">日报内容</TableHead>
@@ -1025,11 +1184,33 @@ function fmtTime(iso: string) {
                 </TableCell>
                 <TableCell class="text-right text-xs tabular-nums">
                   <span v-if="row.commits.length">{{ row.commits.length }}</span>
-                  <span v-else-if="row.missingCommits" class="text-amber-600 dark:text-amber-500">无提交</span>
+                  <span v-else-if="row.missingCommits" class="text-amber-600 dark:text-amber-500">窗口内无提交</span>
+                  <span
+                    v-else-if="row.windowCommits"
+                    class="text-primary"
+                    :title="`当天没有提交，窗口内 ${row.windowCommits} 条`"
+                  >
+                    {{ row.windowCommits }} <span class="text-[10px]">(窗口)</span>
+                  </span>
                   <span v-else class="text-muted-foreground">—</span>
                   <div v-if="row.signals?.length" class="mt-0.5 text-[10px] text-muted-foreground">
                     {{ row.signals.length }} 条活动
                   </div>
+                </TableCell>
+                <TableCell class="text-xs">
+                  <button
+                    v-if="row.reported && row.windowFrom"
+                    type="button"
+                    class="text-left text-primary hover:underline"
+                    :title="`检查窗口 ${row.windowFrom} ~ ${row.windowTo}`"
+                    @click.stop="openWindow(row)"
+                  >
+                    {{ shortRange(row.windowFrom, row.windowTo) }}
+                    <span class="block text-[10px] text-muted-foreground">
+                      {{ row.windowCommits ?? 0 }} 条提交 · 查看
+                    </span>
+                  </button>
+                  <span v-else class="text-muted-foreground">—</span>
                 </TableCell>
                 <TableCell class="max-w-[30rem] text-xs">
                   <div v-if="row.commits.length" class="space-y-0.5">
@@ -1049,6 +1230,26 @@ function fmtTime(iso: string) {
                     </button>
                     <div v-if="row.commits.length > 2" class="text-muted-foreground">
                       另 {{ row.commits.length - 2 }} 条
+                    </div>
+                  </div>
+                  <div v-else-if="row.windowCommitList?.length" class="space-y-0.5">
+                    <div class="text-[10px] text-muted-foreground">当天没有提交，窗口内：</div>
+                    <button
+                      v-for="c in row.windowCommitList.slice(0, 2)"
+                      :key="c.id"
+                      type="button"
+                      class="block w-full truncate text-left hover:underline"
+                      :title="'点击查看改动内容'"
+                      @click.stop="inspect(c)"
+                    >
+                      <span class="text-muted-foreground">{{ fmtTime(c.authoredDate) }}</span>
+                      {{ c.title }}
+                      <span v-if="c.branches?.length" class="ml-1 text-[10px] text-muted-foreground">
+                        {{ c.branches.slice(0, 2).join(' / ') }}
+                      </span>
+                    </button>
+                    <div v-if="row.windowCommitList.length > 2" class="text-muted-foreground">
+                      另 {{ row.windowCommitList.length - 2 }} 条
                     </div>
                   </div>
                   <span v-else class="text-muted-foreground">—</span>
@@ -1202,6 +1403,13 @@ function fmtTime(iso: string) {
           </CardContent>
         </Card>
 
+        <ActivityHistoryPanel
+          v-else-if="viewMode === 'history'"
+          kind="project"
+          @open="openHistory"
+          @rerun="rerunHistory"
+        />
+
         <EvidenceComparison
           v-else-if="viewMode === 'evidence'"
           :projects="selected ? [selected] : []"
@@ -1209,6 +1417,8 @@ function fmtTime(iso: string) {
           :reports="evidenceReports"
           :scope-label="evidenceScope"
           :gitlab="evidenceGitlab"
+          :initial="activityStore.snapshot?.evidence ?? ''"
+          @result="saveEvidence"
         />
 
         <Card v-else class="gap-0 py-4">
@@ -1266,6 +1476,17 @@ function fmtTime(iso: string) {
         </CardContent>
       </Card>
     </div>
+
+    <WindowDetailDialog
+      v-model:open="windowOpen"
+      :title="windowRow ? `${windowRow.memberName} · ${formatDateCN(windowRow.date)}` : '核对窗口'"
+      :offset="settingsStore.settings.rules.reportWindowOffsetWorkdays"
+      :from="windowRow?.windowFrom"
+      :to="windowRow?.windowTo"
+      :dates="windowRow?.windowDates"
+      :commits="windowRow?.windowCommitList ?? []"
+      :logs="windowRow?.windowLogs ?? []"
+    />
 
     <CommitInspectorDialog v-model:open="commitOpen" :commit="inspectedCommit" />
   </div>

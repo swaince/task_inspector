@@ -118,14 +118,39 @@ export interface InspectionFilter {
  * 通用 KV 让上层自己去拼 key、自己序列化，等于把存储结构泄漏到了业务代码里，
  * 换成数据库时每处调用都要改。按实体划分则换实现不动调用方。
  */
+/** 日报同步状态；字段为空表示从未同步过 */
+export interface ReportSyncState {
+  lastIncrementalAt: string | null
+  lastIncrementalFrom: string | null
+  lastIncrementalTo: string | null
+  lastFullAt: string | null
+  lastFullFrom: string | null
+  lastFullTo: string | null
+}
+
 export interface DataStore {
   settingsGet(): Promise<string | null>
   settingsSet(value: string): Promise<void>
 
   reportsUpsert(date: string, reports: DailyReport[]): Promise<number>
+  /** 只替换某个成员当天的日报；传 null 表示源系统里已没有这条日志 */
+  reportsUpsertMember(date: string, memberId: string, reports: DailyReport[] | null): Promise<number>
   reportsByDate(date: string): Promise<DailyReport[]>
   reportsDates(): Promise<string[]>
   reportsClear(): Promise<void>
+  reportsSyncState(): Promise<ReportSyncState>
+  reportsSetSyncState(state: ReportSyncState): Promise<void>
+
+  /** 活动分析历史：payload 为完整记录 JSON */
+  activityAnalysesUpsert(payload: string): Promise<void>
+  activityAnalysesList(kind?: 'project' | 'member'): Promise<string>
+  activityAnalysesGet(id: string): Promise<string | null>
+  /** 只更新载荷里的 AI 结果，不改变分析时间和过期标记 */
+  activityAnalysesUpdatePayload(id: string, payload: string): Promise<void>
+  activityAnalysesMarkStale(dates: string[], reason: string): Promise<number>
+  activityAnalysesDelete(id: string): Promise<void>
+  activityAnalysesClear(): Promise<void>
+  activityAnalysesPrune(keepDays: number): Promise<number>
 
   inspectionsUpsert(result: InspectionResult): Promise<void>
   inspectionsList(filter?: InspectionFilter): Promise<InspectionResult[]>

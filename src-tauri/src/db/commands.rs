@@ -196,6 +196,107 @@ pub fn reports_upsert(db: State<'_, Db>, date: String, payload: String) -> Resul
     insert_reports(&mut conn, &date, &payload)
 }
 
+/// 只替换某个人某一天的日报。
+///
+/// 强制刷新单人单日时不能走 `reports_upsert`：那个命令按天整体重写，
+/// 会用「只有这个人」的拉取结果把同一天其他人的日报一起删掉。
+/// 这里先读出当天全部日报，移除目标成员，再写回，其他人原样保留。
+#[tauri::command]
+pub fn reports_upsert_member(
+    db: State<'_, Db>,
+    date: String,
+    member_id: String,
+    payload: Option<String>,
+) -> Result<usize, String> {
+    let mut conn = db.lock()?;
+    upsert_member_reports(&mut conn, &date, &member_id, payload.as_deref())
+}
+
+/// 单人单日替换的写入内核；拆出来给测试用。
+pub fn upsert_member_reports(
+    conn: &mut rusqlite::Connection,
+    date: &str,
+    member_id: &str,
+    payload: Option<&str>,
+) -> Result<usize, String> {
+    let dates = [date.to_string()];
+    let mut reports = load_reports(conn, &dates)?;
+    reports.retain(|report| {
+        report.get("memberId").and_then(Value::as_str) != Some(member_id)
+    });
+
+    if let Some(payload) = payload {
+        let incoming: Vec<Value> = serde_json::from_str(payload)
+            .map_err(|e| format!("日报数据不是合法 JSON 数组：{e}"))?;
+        for report in incoming {
+            // 只接受目标成员的数据，避免调用方传错把别人写进来
+            if parse::s(&report, "memberId") == member_id {
+                reports.push(report);
+            }
+        }
+    }
+
+    let json = serde_json::to_string(&reports).map_err(|e| format!("序列化日报失败：{e}"))?;
+    insert_reports(conn, date, &json)
+}
+
+/// 日报同步状态：最近一次增量/全量同步的时间和区间。
+#[tauri::command]
+pub fn reports_sync_state(db: State<'_, Db>) -> Result<String, String> {
+    let conn = db.lock()?;
+    let row = conn
+        .query_row(
+            "SELECT last_incremental_at, last_incremental_from, last_incremental_to,
+                    last_full_at, last_full_from, last_full_to
+             FROM report_sync WHERE id = 1",
+            [],
+            |row| {
+                Ok(serde_json::json!({
+                    "lastIncrementalAt": row.get::<_, Option<String>>(0)?,
+                    "lastIncrementalFrom": row.get::<_, Option<String>>(1)?,
+                    "lastIncrementalTo": row.get::<_, Option<String>>(2)?,
+                    "lastFullAt": row.get::<_, Option<String>>(3)?,
+                    "lastFullFrom": row.get::<_, Option<String>>(4)?,
+                    "lastFullTo": row.get::<_, Option<String>>(5)?,
+                }))
+            },
+        )
+        .optional()
+        .map_err(|e| format!("读取日报同步状态失败：{e}"))?;
+
+    Ok(row.unwrap_or_else(|| serde_json::json!({})).to_string())
+}
+
+#[tauri::command]
+pub fn reports_set_sync_state(db: State<'_, Db>, payload: String) -> Result<(), String> {
+    let value: Value =
+        serde_json::from_str(&payload).map_err(|e| format!("同步状态不是合法 JSON：{e}"))?;
+    let conn = db.lock()?;
+    conn.execute(
+        "INSERT INTO report_sync
+           (id, last_incremental_at, last_incremental_from, last_incremental_to,
+            last_full_at, last_full_from, last_full_to)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(id) DO UPDATE SET
+           last_incremental_at   = excluded.last_incremental_at,
+           last_incremental_from = excluded.last_incremental_from,
+           last_incremental_to   = excluded.last_incremental_to,
+           last_full_at          = excluded.last_full_at,
+           last_full_from        = excluded.last_full_from,
+           last_full_to          = excluded.last_full_to",
+        params![
+            parse::opt_str(&value, "lastIncrementalAt"),
+            parse::opt_str(&value, "lastIncrementalFrom"),
+            parse::opt_str(&value, "lastIncrementalTo"),
+            parse::opt_str(&value, "lastFullAt"),
+            parse::opt_str(&value, "lastFullFrom"),
+            parse::opt_str(&value, "lastFullTo"),
+        ],
+    )
+    .map_err(|e| format!("写入日报同步状态失败：{e}"))?;
+    Ok(())
+}
+
 /// 写入内核。拆出来是为了能在测试里直接对着一个临时库调用——
 /// Tauri 的 State 在单元测试里构造不出来。
 pub fn insert_reports(
@@ -241,7 +342,12 @@ pub fn insert_reports(
                 parse::s(report, "memberName"),
                 parse::f64_field(report, "totalHours"),
                 parse::opt_str(report, "submittedAt"),
-                now(),
+                /*
+                 * 单人单日替换时会先读出当天其他人的行再写回；那些行带着
+                 * 上次同步的 syncedAt，必须原样保留，否则强制更新一个人
+                 * 会让同一天所有人都显示「刚刚同步」。
+                 */
+                parse::opt_str(report, "syncedAt").unwrap_or_else(now),
             ],
         )
         .map_err(|e| format!("写入日报失败：{e}"))?;
@@ -297,7 +403,7 @@ pub fn load_reports(conn: &rusqlite::Connection, dates: &[String]) -> Result<Vec
     for date in dates {
         let mut stmt = conn
             .prepare(
-                "SELECT id, member_id, member_name, total_hours, submitted_at
+                "SELECT id, member_id, member_name, total_hours, submitted_at, imported_at
                  FROM daily_reports WHERE date = ?1 ORDER BY member_name",
             )
             .map_err(|e| format!("准备查询失败：{e}"))?;
@@ -310,13 +416,14 @@ pub fn load_reports(conn: &rusqlite::Connection, dates: &[String]) -> Result<Vec
                     row.get::<_, String>(2)?,
                     row.get::<_, f64>(3)?,
                     row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             })
             .map_err(|e| format!("查询日报失败：{e}"))?;
 
         let base: Vec<_> = rows.collect::<Result<_, _>>().map_err(|e| format!("读取行失败：{e}"))?;
 
-        for (id, member_id, member_name, total_hours, submitted_at) in base {
+        for (id, member_id, member_name, total_hours, submitted_at, imported_at) in base {
             let mut entry_stmt = conn
                 .prepare(
                     "SELECT id, project_name, project_code, hours, content, task_refs
@@ -348,6 +455,7 @@ pub fn load_reports(conn: &rusqlite::Connection, dates: &[String]) -> Result<Vec
                 "entries": entries,
                 "totalHours": total_hours,
                 "submittedAt": submitted_at,
+                "syncedAt": imported_at,
             }));
         }
     }
@@ -382,6 +490,207 @@ pub fn reports_clear(db: State<'_, Db>) -> Result<(), String> {
     conn.execute("DELETE FROM daily_reports", [])
         .map_err(|e| format!("清空日报失败：{e}"))?;
     Ok(())
+}
+
+/* ------------------------------------------------------------------ *
+ * 活动分析历史
+ * ------------------------------------------------------------------ */
+
+#[tauri::command]
+pub fn activity_analyses_upsert(db: State<'_, Db>, payload: String) -> Result<(), String> {
+    let value: Value =
+        serde_json::from_str(&payload).map_err(|e| format!("分析记录不是合法 JSON：{e}"))?;
+    let conn = db.lock()?;
+    let facets = value
+        .get("facets")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}))
+        .to_string();
+    conn.execute(
+        "INSERT INTO activity_analyses
+           (id, kind, scope_id, scope_name, from_date, to_date, analyzed_at,
+            commits, people, projects, reported_hours, effective_low, effective_high,
+            facets, payload, stale, stale_reason, stale_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, NULL, NULL)
+         ON CONFLICT(kind, scope_id, from_date, to_date) DO UPDATE SET
+           id = excluded.id,
+           scope_name = excluded.scope_name,
+           analyzed_at = excluded.analyzed_at,
+           commits = excluded.commits,
+           people = excluded.people,
+           projects = excluded.projects,
+           reported_hours = excluded.reported_hours,
+           effective_low = excluded.effective_low,
+           effective_high = excluded.effective_high,
+           facets = excluded.facets,
+           payload = excluded.payload,
+           stale = 0,
+           stale_reason = NULL,
+           stale_at = NULL",
+        params![
+            parse::s(&value, "id"),
+            parse::s(&value, "kind"),
+            parse::s(&value, "scopeId"),
+            parse::s(&value, "scopeName"),
+            parse::s(&value, "from"),
+            parse::s(&value, "to"),
+            parse::s(&value, "analyzedAt"),
+            parse::i64_field(&value, "commits"),
+            parse::i64_field(&value, "people"),
+            parse::i64_field(&value, "projects"),
+            parse::f64_field(&value, "reportedHours"),
+            parse::f64_field(&value, "effectiveLow"),
+            parse::f64_field(&value, "effectiveHigh"),
+            facets,
+            parse::s(&value, "payload"),
+        ],
+    )
+    .map_err(|e| format!("写入分析历史失败：{e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn activity_analyses_list(db: State<'_, Db>, kind: Option<String>) -> Result<String, String> {
+    let conn = db.lock()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, kind, scope_id, scope_name, from_date, to_date, analyzed_at,
+                    commits, people, projects, reported_hours, effective_low, effective_high, facets,
+                    stale, stale_reason, stale_at
+             FROM activity_analyses
+             WHERE (?1 IS NULL OR kind = ?1)
+             ORDER BY analyzed_at DESC",
+        )
+        .map_err(|e| format!("准备分析历史查询失败：{e}"))?;
+
+    let rows = stmt
+        .query_map(params![kind], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "kind": row.get::<_, String>(1)?,
+                "scopeId": row.get::<_, String>(2)?,
+                "scopeName": row.get::<_, String>(3)?,
+                "from": row.get::<_, String>(4)?,
+                "to": row.get::<_, String>(5)?,
+                "analyzedAt": row.get::<_, String>(6)?,
+                "commits": row.get::<_, i64>(7)?,
+                "people": row.get::<_, i64>(8)?,
+                "projects": row.get::<_, i64>(9)?,
+                "reportedHours": row.get::<_, f64>(10)?,
+                "effectiveLow": row.get::<_, f64>(11)?,
+                "effectiveHigh": row.get::<_, f64>(12)?,
+                "facets": row.get::<_, String>(13)?
+                    .parse::<Value>()
+                    .unwrap_or_else(|_| serde_json::json!({})),
+                "stale": row.get::<_, i64>(14)? != 0,
+                "staleReason": row.get::<_, Option<String>>(15)?,
+                "staleAt": row.get::<_, Option<String>>(16)?,
+            }))
+        })
+        .map_err(|e| format!("查询分析历史失败：{e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("读取分析历史失败：{e}"))?;
+
+    serde_json::to_string(&rows).map_err(|e| format!("序列化分析历史失败：{e}"))
+}
+
+#[tauri::command]
+pub fn activity_analyses_get(db: State<'_, Db>, id: String) -> Result<Option<String>, String> {
+    let conn = db.lock()?;
+    conn.query_row(
+        "SELECT payload FROM activity_analyses WHERE id = ?1",
+        params![id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| format!("读取分析记录失败：{e}"))
+}
+
+/// 只更新载荷（AI 报告、申报对照），不动分析时间与过期标记。
+#[tauri::command]
+pub fn activity_analyses_update_payload(
+    db: State<'_, Db>,
+    id: String,
+    payload: String,
+) -> Result<(), String> {
+    let conn = db.lock()?;
+    conn.execute(
+        "UPDATE activity_analyses SET payload = ?2 WHERE id = ?1",
+        params![id, payload],
+    )
+    .map_err(|e| format!("更新分析记录失败：{e}"))?;
+    Ok(())
+}
+
+/// 日志同步发现变更后，把区间覆盖这些日期的分析记录标记为待重新分析。
+#[tauri::command]
+pub fn activity_analyses_mark_stale(
+    db: State<'_, Db>,
+    dates_json: String,
+    reason: String,
+) -> Result<usize, String> {
+    let dates: Vec<String> = serde_json::from_str(&dates_json)
+        .map_err(|e| format!("日期列表不是合法 JSON：{e}"))?;
+    if dates.is_empty() {
+        return Ok(0);
+    }
+    let conn = db.lock()?;
+    let at = now();
+    let mut marked = 0usize;
+    for date in dates {
+        marked += conn
+            .execute(
+                "UPDATE activity_analyses
+                 SET stale = 1, stale_reason = ?1, stale_at = ?2
+                 WHERE stale = 0 AND from_date <= ?3 AND to_date >= ?3",
+                params![reason, at, date],
+            )
+            .map_err(|e| format!("标记分析历史失败：{e}"))?;
+    }
+    Ok(marked)
+}
+
+#[tauri::command]
+pub fn activity_analyses_delete(db: State<'_, Db>, id: String) -> Result<(), String> {
+    let conn = db.lock()?;
+    conn.execute("DELETE FROM activity_analyses WHERE id = ?1", params![id])
+        .map_err(|e| format!("删除分析记录失败：{e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn activity_analyses_clear(db: State<'_, Db>) -> Result<(), String> {
+    let conn = db.lock()?;
+    conn.execute("DELETE FROM activity_analyses", [])
+        .map_err(|e| format!("清空分析历史失败：{e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn activity_analyses_prune(db: State<'_, Db>, keep_days: i64) -> Result<usize, String> {
+    if keep_days <= 0 {
+        return Ok(0);
+    }
+    let conn = db.lock()?;
+    let cutoff = chrono_like_cutoff(keep_days);
+    conn.execute(
+        "DELETE FROM activity_analyses WHERE substr(analyzed_at, 1, 10) < ?1",
+        params![cutoff],
+    )
+    .map_err(|e| format!("清理分析历史失败：{e}"))
+}
+
+fn chrono_like_cutoff(keep_days: i64) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let cutoff = now.saturating_sub((keep_days as u64) * 86_400);
+    // 只用于和 YYYY-MM-DD 前缀比较，不需要完整日期库
+    let days = (cutoff / 86_400) as i64;
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /* ------------------------------------------------------------------ *
@@ -521,6 +830,7 @@ pub fn data_reset(db: State<'_, Db>, mode: String) -> Result<(), String> {
         "DELETE FROM report_entries;
          DELETE FROM daily_reports;
          DELETE FROM inspections;
+         DELETE FROM activity_analyses;
          DELETE FROM commits;
          DELETE FROM embeddings;
          DELETE FROM project_profiles;

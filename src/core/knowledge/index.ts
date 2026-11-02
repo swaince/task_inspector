@@ -1,8 +1,7 @@
 import overview from './docs/overview.md?raw'
-import inspection from './docs/inspection.md?raw'
-import results from './docs/results.md?raw'
 import projects from './docs/projects.md?raw'
 import members from './docs/members.md?raw'
+import logs from './docs/logs.md?raw'
 import activities from './docs/activities.md?raw'
 import projectChat from './docs/project-chat.md?raw'
 import settings from './docs/settings.md?raw'
@@ -23,10 +22,9 @@ import assistantTools from './docs/assistant-tools.md?raw'
 
 const DOC_FILES = {
   overview,
-  inspection,
-  results,
   projects,
   members,
+  logs,
   activities,
   'project-chat': projectChat,
   settings,

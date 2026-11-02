@@ -70,10 +70,35 @@ const scannedAt = ref<string | null>(null)
 
 const inspectedCommit = ref<GitCommit | null>(null)
 const commitOpen = ref(false)
+const forceBusy = ref(false)
+const forceMessage = ref<string | null>(null)
 
 const report = computed(() =>
   reportStore.cache[date.value]?.find(r => r.memberId === memberKey.value) ?? null,
 )
+
+async function forceReport() {
+  if (forceBusy.value || memberKey.value.startsWith('author:'))
+    return
+  forceBusy.value = true
+  forceMessage.value = null
+  try {
+    const result = await reportStore.forceMemberDay(
+      member.value?.reportMemberId || member.value?.id || memberKey.value,
+      memberName.value,
+      date.value,
+    )
+    forceMessage.value = result.found
+      ? '已从日志中心更新这一天的日报'
+      : '日志中心已经没有这一天的日报，本地记录已清除'
+  }
+  catch (err) {
+    forceMessage.value = `强制更新失败：${err instanceof Error ? err.message : String(err)}`
+  }
+  finally {
+    forceBusy.value = false
+  }
+}
 
 /** 日报里只取这个项目的条目，别的项目的工时不该算进来 */
 const entries = computed<DailyReportEntry[]>(() => {
@@ -140,8 +165,8 @@ async function load() {
   failures.value = []
 
   try {
-    // 日志可以补写，这一天的日报直接问源系统要；失败时用本地缓存继续展示
-    await reportStore.refreshRange(date.value, date.value)
+    // 只读本地已同步日志；需要最新时用右上角「强制更新」显式拉取
+    await reportStore.load()
     const settings = settingsStore.settings
     const { batches, failures: failed } = await collectProjectCommits(refs, date.value, date.value, {
       gitlab: new GitLabClient(settings.gitlab),
@@ -332,10 +357,23 @@ function fmtTime(iso: string) {
         <!-- 日报 + 人员 -->
         <div class="space-y-4 xl:sticky xl:top-4">
           <Card class="gap-0 py-0">
-            <CardHeader class="border-b px-4 py-3">
+            <CardHeader class="flex flex-row items-center border-b px-4 py-3">
               <CardTitle class="text-sm">当天日报</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                class="ml-auto text-xs"
+                :disabled="forceBusy || memberKey.startsWith('author:')"
+                :title="memberKey.startsWith('author:') ? '未匹配到人员实体，无法按人强制同步' : '只重新拉取这个人这一天的日志，不影响其他人'"
+                @click="forceReport"
+              >
+                <Loader2Icon v-if="forceBusy" :size="11" class="mr-1.5 animate-spin" />
+                <RefreshCwIcon v-else :size="11" class="mr-1.5" />
+                强制更新
+              </Button>
             </CardHeader>
             <CardContent class="space-y-3 p-4">
+              <p v-if="forceMessage" class="text-[11px] text-muted-foreground">{{ forceMessage }}</p>
               <p v-if="!report" class="rounded-md border border-dashed p-3 text-[11px] leading-relaxed text-muted-foreground">
                 这一天源系统里没有这个人的日报。如果「设置 → 日报系统」还没配好或者连不上，
                 检查时也会因为缺日报而把这一天的提交算成「未申报」。

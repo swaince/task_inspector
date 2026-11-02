@@ -111,6 +111,66 @@ export function createTauriTransport(): Transport {
       return invoke<number>('reports_upsert', { date, payload: JSON.stringify(reports) })
     },
 
+    async reportsUpsertMember(date, memberId, reports) {
+      const { invoke } = await core()
+      return invoke<number>('reports_upsert_member', {
+        date,
+        memberId,
+        payload: reports === null ? null : JSON.stringify(reports),
+      })
+    },
+
+    async reportsSyncState() {
+      const { invoke } = await core()
+      const raw = await invoke<string>('reports_sync_state')
+      return JSON.parse(raw)
+    },
+
+    async reportsSetSyncState(state) {
+      const { invoke } = await core()
+      await invoke('reports_set_sync_state', { payload: JSON.stringify(state) })
+    },
+
+    async activityAnalysesUpsert(payload) {
+      const { invoke } = await core()
+      await invoke('activity_analyses_upsert', { payload })
+    },
+
+    async activityAnalysesList(kind) {
+      const { invoke } = await core()
+      return invoke<string>('activity_analyses_list', { kind: kind ?? null })
+    },
+
+    async activityAnalysesGet(id) {
+      const { invoke } = await core()
+      return invoke<string | null>('activity_analyses_get', { id })
+    },
+
+    async activityAnalysesUpdatePayload(id, payload) {
+      const { invoke } = await core()
+      await invoke('activity_analyses_update_payload', { id, payload })
+    },
+
+    async activityAnalysesMarkStale(dates, reason) {
+      const { invoke } = await core()
+      return invoke<number>('activity_analyses_mark_stale', { datesJson: JSON.stringify(dates), reason })
+    },
+
+    async activityAnalysesDelete(id) {
+      const { invoke } = await core()
+      await invoke('activity_analyses_delete', { id })
+    },
+
+    async activityAnalysesClear() {
+      const { invoke } = await core()
+      await invoke('activity_analyses_clear')
+    },
+
+    async activityAnalysesPrune(keepDays) {
+      const { invoke } = await core()
+      return invoke<number>('activity_analyses_prune', { keepDays })
+    },
+
     async reportsByDate(date: string) {
       const { invoke } = await core()
       const raw = await invoke<string>('reports_by_date', { date })

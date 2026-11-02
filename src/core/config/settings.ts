@@ -250,6 +250,14 @@ export interface RuleSettings {
   fetchFileChanges: boolean
   /** 单次检查覆盖的最大成员数 */
   maxMembersPerRun: number
+  /**
+   * 日报核对的前后滑动窗口（工作日）。
+   *
+   * 0 表示只看当天；2 表示以日报日期为中心，向前后各取最多 2 个工作日。
+   * 例如周三会看周一到周五，周四看周二到周五，周五看周三到周五；
+   * 节假日和周末不计入偏移，报告日期本身始终在窗口内。
+   */
+  reportWindowOffsetWorkdays: number
 }
 
 export interface RetentionSettings {
@@ -573,6 +581,7 @@ export function createDefaultSettings(): AppSettings {
       maxCommitsPerProject: 200,
       fetchFileChanges: true,
       maxMembersPerRun: 50,
+      reportWindowOffsetWorkdays: 2,
     },
     ldap: {
       enabled: false,

@@ -424,6 +424,47 @@ const MIGRATIONS: &[(i64, &str)] = &[(
     ALTER TABLE projects ADD COLUMN dev_mode TEXT;
     "#,
    ),
+   (
+    11,
+    r#"
+    -- 项目活动 / 人员活动的分析历史。
+    --
+    -- 替代原来的「检查历史」：每次扫描一个项目或一个人一段时间后，
+    -- 把完整结果存下来，既能回看，也能在不同维度上做汇总统计。
+    -- facets 是保存时算好的成员/项目维度小计，列表统计不用解析整包 payload。
+    CREATE TABLE activity_analyses (
+      id             TEXT PRIMARY KEY,
+      kind           TEXT NOT NULL,
+      scope_id       TEXT NOT NULL,
+      scope_name     TEXT NOT NULL,
+      from_date      TEXT NOT NULL,
+      to_date        TEXT NOT NULL,
+      analyzed_at    TEXT NOT NULL,
+      commits        INTEGER NOT NULL DEFAULT 0,
+      people         INTEGER NOT NULL DEFAULT 0,
+      projects       INTEGER NOT NULL DEFAULT 0,
+      reported_hours REAL NOT NULL DEFAULT 0,
+      effective_low  REAL NOT NULL DEFAULT 0,
+      effective_high REAL NOT NULL DEFAULT 0,
+      facets         TEXT NOT NULL DEFAULT '{}',
+      payload        TEXT NOT NULL,
+      UNIQUE (kind, scope_id, from_date, to_date)
+    );
+    CREATE INDEX idx_activity_analyses_kind ON activity_analyses (kind, analyzed_at DESC);
+    "#,
+   ),
+   (
+    12,
+    r#"
+    -- 日志同步发现变更后，区间重叠的分析结果要标记为「待重新分析」。
+    --
+    -- 不做自动重跑：一次重跑要重新拉 GitLab、可能还要调模型，成本高且用户
+    -- 不一定希望后台跑；先把过期状态持久化，在历史列表里明确提示并提供入口。
+    ALTER TABLE activity_analyses ADD COLUMN stale INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE activity_analyses ADD COLUMN stale_reason TEXT;
+    ALTER TABLE activity_analyses ADD COLUMN stale_at TEXT;
+    "#,
+   ),
 ];
 
 #[cfg(test)]
@@ -476,6 +517,7 @@ mod tests {
             "embeddings",
             "commits_fts",
             "report_entries_fts",
+            "activity_analyses",
             "meta",
         ] {
             assert!(names.iter().any(|n| n == expected), "缺少表 {expected}，实际有 {names:?}");
@@ -528,6 +570,51 @@ mod tests {
             v
         };
         assert_eq!(dates, vec!["2026-10-16"]);
+    }
+
+    #[test]
+    fn member_upsert_only_replaces_one_member() {
+        let database = db();
+        let mut conn = database.lock().unwrap();
+        let date = "2026-10-20";
+
+        let payload = serde_json::json!([
+            {
+                "id": "u1@2026-10-20", "date": date, "memberId": "u1", "memberName": "张三",
+                "totalHours": 4,
+                "entries": [{ "id": "a1", "projectName": "支付", "hours": 4, "content": "旧内容" }]
+            },
+            {
+                "id": "u2@2026-10-20", "date": date, "memberId": "u2", "memberName": "李四",
+                "totalHours": 8, "syncedAt": "2026-10-19T00:00:00Z",
+                "entries": [{ "id": "b1", "projectName": "后台", "hours": 8, "content": "别人的日志" }]
+            }
+        ])
+        .to_string();
+        insert_reports(&mut conn, date, &payload).unwrap();
+
+        // 只更新张三：李四必须原样保留
+        let updated = serde_json::json!([{
+            "id": "u1@2026-10-20", "date": date, "memberId": "u1", "memberName": "张三",
+            "totalHours": 8,
+            "entries": [{ "id": "a2", "projectName": "支付", "hours": 8, "content": "改过的内容" }]
+        }])
+        .to_string();
+        commands::upsert_member_reports(&mut conn, date, "u1", Some(&updated)).unwrap();
+
+        let reports = load_reports(&conn, &[date.to_string()]).unwrap();
+        assert_eq!(reports.len(), 2, "不应影响同一天其他人");
+        let zhang = reports.iter().find(|r| r["memberId"] == "u1").unwrap();
+        assert_eq!(zhang["entries"][0]["content"], "改过的内容");
+        let li = reports.iter().find(|r| r["memberId"] == "u2").unwrap();
+        assert_eq!(li["entries"][0]["content"], "别人的日志");
+        assert_eq!(li["syncedAt"], "2026-10-19T00:00:00Z", "未被强制更新的成员应保留原同步时间");
+
+        // 源系统里没有这条日志时，只删除张三
+        commands::upsert_member_reports(&mut conn, date, "u1", None).unwrap();
+        let reports = load_reports(&conn, &[date.to_string()]).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0]["memberId"], "u2");
     }
 
     #[test]

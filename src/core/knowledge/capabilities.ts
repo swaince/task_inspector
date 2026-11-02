@@ -14,9 +14,6 @@ export interface AppFeature {
 
 export const APP_FEATURES: AppFeature[] = [
   { route: 'dashboard', title: '概览', docId: 'overview' },
-  { route: 'inspect', title: '执行检查', docId: 'inspection' },
-  { route: 'history', title: '检查历史', docId: 'results' },
-  { route: 'result', title: '单条检查结果', docId: 'results' },
   { route: 'assistant', title: '应用助手', docId: 'assistant-tools' },
   { route: 'project-activity', title: '项目活动', docId: 'activities' },
   { route: 'activity-detail', title: '项目活动详情', docId: 'activities' },
@@ -25,6 +22,9 @@ export const APP_FEATURES: AppFeature[] = [
   { route: 'project-profile', title: '项目画像', docId: 'projects' },
   { route: 'project-chat', title: '项目对话', docId: 'project-chat' },
   { route: 'members', title: '人员', docId: 'members' },
+  { route: 'logs', title: '日志同步', docId: 'logs' },
+  { route: 'log-day', title: '日志详情', docId: 'logs' },
+  { route: 'log-detail', title: '单日日志', docId: 'logs' },
   { route: 'settings', title: '设置', docId: 'settings' },
 ]
 

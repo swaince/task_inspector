@@ -44,9 +44,9 @@ const tzLabel = computed(() => {
 <template>
   <Card class="gap-0 py-4">
     <CardHeader class="px-4 pb-3">
-      <CardTitle class="text-sm">判定规则</CardTitle>
+      <CardTitle class="text-sm">采集规则</CardTitle>
       <CardDescription class="text-xs">
-        决定「哪些提交算作某人某天的工作」。默认值适合常规作息，有夜班或跨时区团队时再调整。
+        决定「哪些提交、在哪个时间窗里算作某人某天的工作」。影响项目活动、人员活动和分析历史的统计口径。
       </CardDescription>
     </CardHeader>
 
@@ -188,6 +188,29 @@ const tzLabel = computed(() => {
             @update:model-value="v => { rules.maxMembersPerRun = Math.max(1, Number(v) || 50); save() }"
           />
         </div>
+      </div>
+
+      <div class="space-y-1 rounded-md border px-3 py-2.5">
+        <Label for="r-report-window" class="text-xs">
+          日报核对窗口前后偏移（工作日）
+        </Label>
+        <div class="flex items-center gap-2">
+          <Input
+            id="r-report-window"
+            :model-value="rules.reportWindowOffsetWorkdays ?? 2"
+            type="number"
+            min="0"
+            max="7"
+            class="h-8 w-20 text-xs"
+            @update:model-value="v => { rules.reportWindowOffsetWorkdays = Math.min(7, Math.max(0, Number(v) || 0)); save() }"
+          />
+          <span class="text-[11px] text-muted-foreground">天</span>
+        </div>
+        <p class="text-[11px] leading-relaxed text-muted-foreground">
+          0 表示只看日报当天；2 表示以日报日期为中心向前后各取最多 2 个工作日。
+          窗口会跨过周末和节假日继续取工作日，例如周五会包含下周一、周二；
+          但不会跨出日报所在的自然月，所以月底最后一天只有前一天、前两天和当天，共 3 天。
+        </p>
       </div>
 
       <div class="flex items-center justify-between rounded-md border px-3 py-2.5">

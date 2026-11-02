@@ -7,13 +7,13 @@ import UpdateChecker from '@/components/common/UpdateChecker.vue'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { applyTheme } from '@/composables/theme'
 import { useSettingsStore } from '@/core/store/settings'
-import { useHistoryStore } from '@/core/store/history'
+import { useActivityHistoryStore } from '@/core/store/activityHistory'
 import { useReportStore } from '@/core/store/reports'
 import { migrateMappingsToEntities } from '@/core/store/bootstrap'
 
 const route = useRoute()
 const settingsStore = useSettingsStore()
-const historyStore = useHistoryStore()
+const activityHistory = useActivityHistoryStore()
 const reportStore = useReportStore()
 
 const title = computed(() => (route.meta.title as string | undefined) ?? '研发工作核查')
@@ -31,12 +31,10 @@ onMounted(async () => {
   await Promise.all([
     settingsStore.load(),
     reportStore.load(),
-    historyStore.load(),
+    activityHistory.load(),
   ])
   // 旧版把项目/人员放在 settings 的映射里，这里搬成实体（幂等，没有旧数据时什么都不做）
   await migrateMappingsToEntities()
-  // 保留期清理放在后台，不阻塞首屏
-  void historyStore.prune(settingsStore.settings.retention.keepDays)
 })
 </script>
 

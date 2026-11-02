@@ -92,17 +92,18 @@ const canGenerate = computed(() =>
  * 这时先解析再生成，避免画像按钮看起来不可用。
  */
 async function resolveLinksIfNeeded(p: Project): Promise<Project> {
-  if (p.repos?.length || !p.links?.length)
+  // 每次都重新解析：关联的是组时，组里新增的仓库不会自动出现在 repos 缓存里
+  if (!p.links?.length)
     return p
 
   const settings = settingsStore.settings
   if (!settings.gitlab.baseUrl.trim() || !settings.gitlab.token.trim()) {
-    if (localPaths.value.length)
+    if (p.repos?.length || localPaths.value.length)
       return p
     throw new Error('项目已添加 GitLab 关联但还没解析；请先在「设置 → GitLab」填写地址和 Token，或在下面添加本地代码目录。')
   }
 
-  profileStore.setProgress(p.id, '正在解析 GitLab 关联…')
+  profileStore.setProgress(p.id, '正在刷新 GitLab 仓库列表…')
   const result = await resolveProjectLinks(
     new GitLabClient(settings.gitlab),
     p.links,
@@ -111,6 +112,10 @@ async function resolveLinksIfNeeded(p: Project): Promise<Project> {
 
   if (!result.repos.length) {
     const detail = result.failures.length ? result.failures.join('；') : '关联没有解析出任何仓库'
+    if (p.repos?.length) {
+      notice.value = `仓库列表刷新失败，继续使用上次的仓库清单：${detail}`
+      return p
+    }
     if (localPaths.value.length) {
       notice.value = `GitLab 关联解析失败，已改用本地代码目录：${detail}`
       return p

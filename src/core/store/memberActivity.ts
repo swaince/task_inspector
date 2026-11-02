@@ -21,6 +21,16 @@ export interface MemberActivityRow {
   signals?: WorkSignal[]
   reportedHours: number
   reportedContents: string[]
+  /** 该日报的核对窗口（含前后工作日） */
+  windowFrom?: string
+  windowTo?: string
+  windowDates?: string[]
+  /** 窗口内该成员的提交数 */
+  windowCommits?: number
+  /** 窗口内的提交明细 */
+  windowCommitList?: GitCommit[]
+  /** 窗口内该成员的日报内容 */
+  windowLogs?: Array<{ date: string, content: string }>
 }
 
 export interface MemberActivitySnapshot {
@@ -42,6 +52,8 @@ export interface MemberActivitySnapshot {
   liveFailed: string | null
   report: string
   reportAt: string | null
+  /** 申报对照的 AI 结果（markdown），生成后持久化 */
+  evidence?: string
 }
 
 export const useMemberActivityStore = defineStore('memberActivity', () => {

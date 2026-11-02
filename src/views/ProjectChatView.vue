@@ -55,7 +55,7 @@ import { resolveMcpServers } from '@/core/agent/toolChat'
 import { createBuiltinTools } from '@/core/agent/builtin'
 import { isDesktop, transport } from '@/core/bridge'
 import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
-import { contextRange, loadProjectContext } from '@/core/engine/projectContext'
+import { loadProjectContext } from '@/core/engine/projectContext'
 import { useProfileStore } from '@/core/store/profile'
 import { useProjectChatStore } from '@/core/store/projectChat'
 import { useProjectStore } from '@/core/store/projects'
@@ -275,15 +275,9 @@ async function ensureContext(force = false): Promise<ProjectContext | null> {
           }
         }
       }
-      const { from, to } = contextRange(DAYS)
       const notes: string[] = []
-
-      if (settingsStore.settings.dailyReport.source === 'http') {
-        chat.setBuildProgress(id, `正在刷新 ${from} ~ ${to} 的日报…`)
-        const refreshed = await reportStore.refreshRange(from, to)
-        if (!refreshed.ok)
-          notes.push(`日报刷新失败：${refreshed.error ?? '未知错误'}（使用本地缓存）`)
-      }
+      if (settingsStore.settings.dailyReport.source === 'http')
+        notes.push('日报来自本地已同步数据；需要最新内容请先在「日志」页同步')
 
       const built = await loadProjectContext({
         project: p,

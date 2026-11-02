@@ -24,8 +24,18 @@ export interface ActivityRow {
   contents: string[]
   /** 有提交但日报没写 —— 漏报 */
   missingInReport: boolean
-  /** 日报写了但当天没提交 —— 无法自证 */
+  /** 日报写了但窗口内没有提交 —— 无法自证 */
   missingCommits: boolean
+  /** 该日报的核对窗口（含前后工作日） */
+  windowFrom?: string
+  windowTo?: string
+  windowDates?: string[]
+  /** 窗口内该成员的提交数（含当天） */
+  windowCommits?: number
+  /** 窗口内的提交明细，供窗口详情展示 */
+  windowCommitList?: GitCommit[]
+  /** 窗口内该成员/该项目的日报内容 */
+  windowLogs?: Array<{ date: string, content: string }>
 }
 
 export interface ActivitySnapshot {
@@ -49,6 +59,8 @@ export interface ActivitySnapshot {
   /** 模型生成的分析报告（markdown） */
   report: string
   reportAt: string | null
+  /** 申报对照的 AI 结果（markdown），生成后持久化 */
+  evidence?: string
 }
 
 export const useActivityStore = defineStore('activity', () => {

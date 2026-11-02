@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { SaveIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -15,8 +16,13 @@ import { useRunnerStore } from '@/core/store/runner'
 
 const settingsStore = useSettingsStore()
 const runner = useRunnerStore()
+const route = useRoute()
 
-const tab = ref('gitlab')
+const TABS = ['gitlab', 'report', 'calendar', 'llm', 'rules', 'analysis', 'data']
+const initialTab = typeof route.query.tab === 'string' && TABS.includes(route.query.tab)
+  ? route.query.tab
+  : 'gitlab'
+const tab = ref(initialTab)
 const savedFlash = ref(false)
 
 /**
@@ -48,7 +54,7 @@ watch(
             <TabsTrigger value="report">日报系统</TabsTrigger>
             <TabsTrigger value="calendar">工作日历</TabsTrigger>
             <TabsTrigger value="llm">模型</TabsTrigger>
-            <TabsTrigger value="rules">判定规则</TabsTrigger>
+            <TabsTrigger value="rules">采集规则</TabsTrigger>
             <TabsTrigger value="analysis">代码分析</TabsTrigger>
             <TabsTrigger value="data">数据</TabsTrigger>
           </TabsList>

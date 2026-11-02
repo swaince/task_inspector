@@ -11,22 +11,7 @@ const router = createRouter({
       path: '/',
       name: 'dashboard',
       component: () => import('@/views/DashboardView.vue'),
-      meta: { title: '概览', description: '最近一次检查的结论、需要跟进的人和异常提交' },
-    },
-    {
-      path: '/inspect',
-      name: 'inspect',
-      component: () => import('@/views/InspectView.vue'),
-      meta: {
-        title: '执行检查',
-        description: '选一段时间，核查关注成员的日报能否被当天的代码提交证明；默认最近 7 天，按工作日历跳过节假日',
-      },
-    },
-    {
-      path: '/history',
-      name: 'history',
-      component: () => import('@/views/HistoryView.vue'),
-      meta: { title: '检查历史', description: '按日期回看已经保存的检查结论' },
+      meta: { title: '概览', description: '项目活动与人员活动的分析历史和多维统计' },
     },
     {
       path: '/assistant',
@@ -36,12 +21,6 @@ const router = createRouter({
         title: '应用助手',
         description: '查官方文档、问功能与数据口径，或在确认后维护人员与项目关联',
       },
-    },
-    {
-      path: '/result/:date/:memberId',
-      name: 'result',
-      component: () => import('@/views/ResultView.vue'),
-      meta: { title: '检查详情', description: '某个成员某一天的逐条核对结果与证据' },
     },
     {
       path: '/activity',
@@ -102,6 +81,35 @@ const router = createRouter({
       name: 'members',
       component: () => import('@/views/MembersView.vue'),
       meta: { title: '人员', description: '维护人员及其 GitLab 身份，决定提交能归到谁' },
+    },
+    {
+      path: '/logs',
+      name: 'logs',
+      component: () => import('@/views/LogsView.vue'),
+      meta: {
+        title: '日志同步',
+        description: '从日志中心同步并持久化日报，支持增量、全量和单人单日强制更新',
+      },
+    },
+    {
+      path: '/logs/:date',
+      name: 'log-day',
+      component: () => import('@/views/LogDayView.vue'),
+      meta: {
+        title: '日志详情',
+        activeName: 'logs',
+        description: '某一天所有人的日志卡片，点开查看当天的项目列表和日报内容',
+      },
+    },
+    {
+      path: '/logs/:date/:memberId',
+      name: 'log-detail',
+      component: () => import('@/views/LogDetailView.vue'),
+      meta: {
+        title: '单日日志',
+        activeName: 'logs',
+        description: '某个人某一天申报的全部项目、工时和工作内容',
+      },
     },
     {
       path: '/settings',
